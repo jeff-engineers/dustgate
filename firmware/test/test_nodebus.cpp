@@ -486,7 +486,7 @@ int main(int argc, char** argv) {
       // The safe reading is the DEFAULT one: a node built before claims answers
       // with neither field, and its silence must mean "yes", not "maybe".
       DynamicJsonDocument f(512);
-      deserializeJson(f, R"({"t":"WELCOME","v":2,"nodeId":"n","board":"b","fw":"1",
+      deserializeJson(f, R"({"t":"WELCOME","v":1,"nodeId":"n","board":"b","fw":"1",
                              "caps":{"servos":4,"bus":0}})");
       ok("a legacy WELCOME is accepted",
          topo::nodelink::welcomeAccepted(f.as<JsonObjectConst>()));
@@ -1227,7 +1227,7 @@ int main(int argc, char** argv) {
     // Adding CONFIG/SENSE did NOT bump the version: both ends ignore a frame
     // type they don't know, so every old/new combination degrades safely and a
     // bump would force a flash of every board in the shop to buy nothing.
-    ok("protocol version unchanged by CONFIG/SENSE", kVersion == 2);
+    ok("protocol version unchanged by CONFIG/SENSE", kVersion == 1);
 
     // STATE err — the PAIR of nodelink.test.js's "a move that ended without arriving" block, same order.
     // (Its last two cases, the refusals, are validateFrame's; the brain reads STATE without a validator — NodeSession.)
@@ -1646,7 +1646,7 @@ int main(int argc, char** argv) {
       StaticJsonDocument<128> j;
       buildJoin(j.to<JsonObject>(), "dustgate-planer");
       ok("a JOIN carries the node and the version",
-         std::string(j["t"] | "") == "JOIN" && std::string(j["nodeId"] | "") == "dustgate-planer" && (j["v"] | 0) == 2);
+         std::string(j["t"] | "") == "JOIN" && std::string(j["nodeId"] | "") == "dustgate-planer" && (j["v"] | 0) == 1);
       ok("the address bound", kMaxWhereIpLen == 15);
       ok("the beacon port", kBeaconPort == 41234);
       ok("REFUSE not-paired is a reason",  isRefuseReason("not-paired"));
@@ -1672,7 +1672,7 @@ int main(int argc, char** argv) {
       StaticJsonDocument<512> w1;
       buildWelcome(w1.to<JsonObject>(), "n", "b", "f", 2, 0, nullptr, true, 0, false, true);
       ok("caps.join 1 means it dials in", (w1["caps"]["join"] | 0) == 1);
-      ok("JOIN did not bump the version", kVersion == 2);
+      ok("JOIN did not bump the version", kVersion == 1);
     }
 
     // ── collector node: PRESS, a bin sensor, caps.rf, caps.bin ────────────────
@@ -1735,7 +1735,7 @@ int main(int argc, char** argv) {
       buildWelcome(w1.to<JsonObject>(), "n", "b", "f", 2, 0, nullptr, true, 0, false, false, true, true);
       ok("caps.rf 1 means a transmitter", (w1["caps"]["rf"] | 0) == 1);
       ok("caps.bin 1 means a bin pad",    (w1["caps"]["bin"] | 0) == 1);
-      ok("PRESS did not bump the version", kVersion == 2);
+      ok("PRESS did not bump the version", kVersion == 1);
     }
 
     // ── collector node: the runtime sends a bin sensor to a board that has the pad,

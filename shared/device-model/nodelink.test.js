@@ -430,7 +430,7 @@ const eq = (name, got, want) =>
   // Both ends ignore a frame type they don't know, so all four old/new
   // combinations degrade to something safe. A bump would force a flash of every
   // board in the shop to buy nothing — the exact cost this protocol avoids.
-  eq('protocol version is unchanged by CONFIG/SENSE', NL.NODELINK_VERSION, 2);
+  eq('protocol version is unchanged by CONFIG/SENSE', NL.NODELINK_VERSION, 1);
   check('CONFIG is p2s only', NL.P2S.includes('CONFIG') && !NL.S2P.includes('CONFIG'));
   check('SENSE is s2p only', NL.S2P.includes('SENSE') && !NL.P2S.includes('SENSE'));
 }
@@ -502,7 +502,7 @@ const eq = (name, got, want) =>
   eq('a long reason is cut to 64', NL.otaState('fail', undefined, 'x'.repeat(100)).err.length, 64);
   check('an unknown state is refused',
         NL.validateFrame({ t: 'OTASTATE', state: 'maybe' }, 's2p').length === 1);
-  eq('OTA did not bump the version', NL.NODELINK_VERSION, 2);
+  eq('OTA did not bump the version', NL.NODELINK_VERSION, 1);
 }
 
 // ── node-initiated links: JOIN, REFUSE, WHERE, caps.join ────────────────────
@@ -534,7 +534,7 @@ const eq = (name, got, want) =>
   check('caps.join 1 means it dials in', NL.dialsIn(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, join: 1 })) === true);
   eq('caps.join 1 validates', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, join: 1 }), 's2p'), []);
   check('caps.join 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, join: 2 }), 's2p').length === 1);
-  eq('JOIN did not bump the version', NL.NODELINK_VERSION, 2);
+  eq('JOIN did not bump the version', NL.NODELINK_VERSION, 1);
 }
 
 // ── the collector's jobs on a node: PRESS, a bin sensor, caps.rf, caps.bin ───
@@ -569,7 +569,7 @@ const eq = (name, got, want) =>
   check('caps.bin 1 means a bin pad', NL.watchesBin(w1) === true);
   eq('both caps validate', NL.validateFrame(w1, 's2p'), []);
   check('caps.rf 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, rf: 2 }), 's2p').length === 1);
-  eq('PRESS did not bump the version', NL.NODELINK_VERSION, 2);
+  eq('PRESS did not bump the version', NL.NODELINK_VERSION, 1);
 }
 
 // ── fail closed (D-85, 2026-10-19) ─────────────────────────────────────────
@@ -615,7 +615,7 @@ const eq = (name, got, want) =>
   // Same 3x ratio as PING/PONG, and for the same reason: two reports may go
   // missing before anything is declared.
   eq('stale is 3x the repeat', NL.SENSE_STALE_MS / NL.SENSE_REPEAT_MS, 3);
-  eq('protocol version', NL.NODELINK_VERSION, 2);
+  eq('protocol version', NL.NODELINK_VERSION, 1);
 }
 
 // ── bus servos (2026-11-01). Same cases as the "bus —" block of test_nodebus.cpp, same order. ──
@@ -639,7 +639,8 @@ const eq = (name, got, want) =>
   eq('bus — B9 a bus board says how many it can drive', NL.busServos(w), 6);
   eq('bus — B10 a PWM board says 0', NL.busServos(NL.welcome('n', 'xiao_c5', 'x', { servos: 2, bus: 0 })), 0);
   check('bus — B11 seven is refused', NL.validateFrame(NL.welcome('n', 'b', 'x', { servos: 0, bus: 7 }), 's2p').length === 1);
-  check('bus — B12 caps.linear alone is refused', NL.validateFrame(NL.welcome('n', 'b', 'x', { servos: 0, linear: 1 }), 's2p').length === 1);
+  eq('bus — B12 a board flashed before bus servos says nothing of them, and has none',
+     [NL.validateFrame(NL.welcome('n', 'b', 'x', { servos: 2, linear: 0 }), 's2p').length, NL.busServos(NL.welcome('n', 'b', 'x', { servos: 2, linear: 0 }))], [0, 0]);
 
   eq('bus — B13 find validates', NL.validateFrame(NL.servo(5, 'find'), 'p2s'), []);
   eq('bus — B14 assign to 12 validates', NL.validateFrame(NL.servo(6, 'assign', { to: 12 }), 'p2s'), []);

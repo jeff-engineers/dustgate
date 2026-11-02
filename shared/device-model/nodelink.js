@@ -39,9 +39,12 @@
 
 'use strict';
 
-/** Protocol version. Bump on any incompatible frame change. 2 (2026-11-01): bus servos — caps.bus replaced caps.linear,
- *  a SET names a bus servo by `bus`, and SERVO / SERVOREPLY / BUS. */
-const NODELINK_VERSION = 2;
+/** Protocol version. Bump on any incompatible frame change — knowing the cost: a node on another version refuses the
+ *  link, and with it the over-the-WiFi update that would bring it in line, so every board then needs a USB flash.
+ *  Bus servos (2026-11-01) did NOT bump it (jeff): nothing a PWM node sends or receives changed — `caps.bus` reads an old
+ *  node's silence as 0 bus servos, which is true of it, and a PING it already answered — so the brain can still update
+ *  every node over WiFi. Only the slider node's frames changed, and that board is reflashed by USB as the bus board. */
+const NODELINK_VERSION = 1;
 
 /** Frame types, primary → secondary. */
 const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE', 'PRESS', 'ALERT', 'SERVO'];
@@ -828,9 +831,10 @@ function validateFrame(f, direction) {
     case 'WELCOME':
       if (f.v !== NODELINK_VERSION) errs.push(`WELCOME.v ${f.v} != ${NODELINK_VERSION}`);
       str('nodeId'); str('board');
-      if (!f.caps || typeof f.caps.servos !== 'number' || typeof f.caps.bus !== 'number') {
-        errs.push('WELCOME.caps must be {servos:number, bus:number}');
-      } else if (!Number.isInteger(f.caps.bus) || f.caps.bus < 0 || f.caps.bus > MAX_BUS_SERVOS_PER_NODE) {
+      // `bus` absent means 0 — every board flashed before bus servos (2026-11-01) says nothing about them, and is right.
+      if (!f.caps || typeof f.caps.servos !== 'number') {
+        errs.push('WELCOME.caps must be {servos:number, bus?:number}');
+      } else if (f.caps.bus !== undefined && (!Number.isInteger(f.caps.bus) || f.caps.bus < 0 || f.caps.bus > MAX_BUS_SERVOS_PER_NODE)) {
         errs.push(`WELCOME.caps.bus must be a whole number 0..${MAX_BUS_SERVOS_PER_NODE}`);
       }
       // OPTIONAL, and absent means none — a board flashed before clamps existed

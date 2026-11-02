@@ -20,7 +20,7 @@ struct RecSink : SessionSink {
   bool event(const char* ev) const { for (auto& e : events) if (e.rfind(ev, 0) == 0) return true; return false; }
 };
 
-static const char* kWelcome = R"({"t":"WELCOME","v":2,"nodeId":"n1","board":"xiao_c5","fw":"abc 1004-1200","caps":{"servos":2,"bus":0,"ct":1,"plug":1,"join":1,"rf":1,"bin":1},"upS":42,"rst":"poweron"})";
+static const char* kWelcome = R"({"t":"WELCOME","v":1,"nodeId":"n1","board":"xiao_c5","fw":"abc 1004-1200","caps":{"servos":2,"bus":0,"ct":1,"plug":1,"join":1,"rf":1,"bin":1},"upS":42,"rst":"poweron"})";
 
 static JsonObjectConst sel(DynamicJsonDocument& d) {
   deserializeJson(d, R"({"id":"g1","kind":"servoGate","controllerId":"n1","servo":{"channel":0,"referenceAngle":90,"minAngle":0,"maxAngle":180},
@@ -92,7 +92,7 @@ int main() {
   printf("\nS2 capabilities absent mean NO\n");
   {
     Fx f;
-    f.feed(R"({"t":"WELCOME","v":2,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"bus":0}})");
+    f.feed(R"({"t":"WELCOME","v":1,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"bus":0}})");
     ok("an old board has none of the newer jobs", !f.s.pollsPlugs() && !f.s.dialsIn() && !f.s.canPressRf() && !f.s.watchesBin());
     ok("and a PRESS to it is refused", !f.s.pressRf(94, 14, 270, 24));
   }
@@ -100,7 +100,7 @@ int main() {
   printf("\nS3 a refusal and a version mismatch\n");
   {
     Fx f;
-    f.feed(R"({"t":"WELCOME","v":2,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"bus":0},"accepted":false,"claimedBy":"garage"})");
+    f.feed(R"({"t":"WELCOME","v":1,"nodeId":"n1","board":"b","fw":"f","caps":{"servos":2,"bus":0},"accepted":false,"claimedBy":"garage"})");
     ok("a refused claim leaves the link offline and names the owner", !f.s.online() && f.s.wasRefused() && std::string(f.s.refusedBy()) == "garage");
     ok("...and logs it", f.sink.event("refused"));
     ok("health says refused", f.s.health().refused);

@@ -28,7 +28,7 @@
 namespace topo {
 namespace nodelink {
 
-static const int kVersion = 2;   // NODELINK_VERSION in nodelink.js
+static const int kVersion = 1;   // NODELINK_VERSION in nodelink.js — see there for why bus servos did not bump it
 
 // THE PWM SERVO PULSE RANGE (2026-10-07): the pulse widths that angle 0 and angle 180 map to, for every PWM servo in the
 // shop. Shop-wide because a shop buys its servos as one multipack (jeff), set on the Settings page and kept in the layout

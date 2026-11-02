@@ -919,22 +919,15 @@ run_flash_node() {
   set -- "${args[@]+"${args[@]}"}"
 
   if [[ "$node_env" == "$LINEAR_NODE_ENV" ]]; then
-    echo "▶ Secondary NODE — flashing the SLIDER firmware (XIAO C5 + ST3215)."
+    echo "▶ Secondary NODE — flashing the BUS BOARD firmware (XIAO C5 + ST3215-family servos)."
     echo "  Target: $(describe_env "$node_env")"
     echo ""
-    echo "  This node drives ONE rack instead of a servo bank: one bus servo on"
-    echo "  D6/D7, two endstops on D8/D9, and its own 12V supply at the gate. The"
-    echo "  primary sends it an absolute position in mm and it turns that into"
-    echo "  encoder counts."
+    echo "  Up to six bus servos (valves, manifolds, at most one slider) on the"
+    echo "  D6/D7 bus, the slider's two endstops on D8/D9, and its own 12V supply."
+    echo "  It moves one servo at a time. Servos are numbered from the app's Boards"
+    echo "  page (Add a servo): a new servo answers as 1 until then, and nothing moves it."
     echo ""
-    echo "  IT HOMES AT BOOT, and that is the one thing this node decides for"
-    echo "  itself. A step-counting servo has no datum and comes back from a"
-    echo "  power cycle holding nothing, so the carriage WILL sweep on the first"
-    echo "  boot after flashing. Moves sent during the sweep are held, not lost."
-    echo ""
-    echo "  + the same SSD1306 status screen and wake button as any other board."
-    echo "    On a slider it also says 'not homed' — which is the state in which"
-    echo "    the node accepts moves and holds them."
+    echo "  A slider homes on the first move that needs it, never at boot."
     echo ""
   else
   echo "▶ Secondary NODE — flashing the node firmware."
@@ -1087,7 +1080,12 @@ run_flash_node() {
   echo "      1. Leave it powered on the same WiFi."
   echo "      2. Open the app → Boards → Scan for boards."
   echo "      3. '$HOSTNAME_CFG' should appear — tap Add."
-  echo "      4. Then assign gates to it in Gates."
+  if [[ "${node_env:-}" == "$LINEAR_NODE_ENV" ]]; then
+    echo "      4. On the shop layout, cable its gates to its chain ports."
+    echo "      5. Boards → Add a servo, one servo at a time, then set each gate's positions."
+  else
+    echo "      4. Then assign gates to it in Gates."
+  fi
   echo ""
   echo "▶ Opening serial monitor (Ctrl+C to exit)…"
   run_monitor --scan-boot "$node_env"
