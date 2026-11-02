@@ -599,6 +599,10 @@ private:
         nodelink::strlcpy_(_fw,    f["fw"]    | "", sizeof(_fw));
         _capServos = f["caps"]["servos"] | 0;
         _capBus = f["caps"]["bus"] | 0;
+        // A slider board on firmware from before bus servos says `linear: 1` and nothing of `bus`. It IS a bus board, and
+        // reading it as one keeps the layout from calling it a PWM board (which refuses its own sliding gate) and gives
+        // it the bus image on Update, not the PWM one (found 2026-11-01, while the shop's slider still ran old firmware).
+        if (!_capBus && (f["caps"]["linear"] | 0) > 0) _capBus = nodelink::kMaxBusServos;
         // Absent means none: a board flashed before clamps existed answers exactly as it always did
         // rather than being read as broken.
         _capClamps = f["caps"]["ct"] | 0;

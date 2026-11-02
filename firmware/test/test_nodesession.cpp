@@ -414,7 +414,16 @@ int main() {
     ok("an err on a MOVING state is not a fault", f.s.busy() && f.s.health().moveFault == nullptr);
   }
 
-    printf("\nS20 bus servos, the link check and SERVO orders (2026-11-01)\n");
+    printf("\nS21 a slider on firmware from before bus servos is a bus board\n");
+  {
+    Fx f; f.up();
+    f.feed(R"({"t":"WELCOME","v":1,"nodeId":"n1","board":"xiao_c5","fw":"old","caps":{"servos":0,"linear":1}})");
+    ok("caps.linear 1 with no bus count reads as a bus board", f.s.info().capBus == topo::nodelink::kMaxBusServos);
+    f.feed(R"({"t":"WELCOME","v":1,"nodeId":"n1","board":"xiao_c5","fw":"old","caps":{"servos":2,"linear":0}})");
+    ok("...and an old PWM board as none", f.s.info().capBus == 0);
+  }
+
+  printf("\nS20 bus servos, the link check and SERVO orders (2026-11-01)\n");
   {
     Fx f; f.up();
     std::string frame;
