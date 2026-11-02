@@ -24,8 +24,8 @@
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_bus_bench -t upload
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio device monitor -e xiao_c5_bus_bench
 //
-// ⚠️ Read docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops before connecting the signal wire.
-// The bus logic level is unconfirmed and this part is not 5V tolerant.
+// ⚠️ Through Seeed's Bus Servo Driver Board only: it buffers the bus at 3.3 V (boards/xiao_c5.h,
+// "THE DRIVER BOARD"). This part is not 5V tolerant, so never wire a servo lead straight to a pad.
 // =============================================================================
 
 #include <Arduino.h>
