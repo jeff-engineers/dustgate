@@ -170,6 +170,11 @@ node — its servos share one brick, and the wire-length limit assumes only the 
 
 ## Later
 
+- **A claim that fails at pairing is never retried (found 2026-11-01).** The native brain claims a board once, on a
+  thread, when it is paired (`claimNode` in native/src/main.cpp). If that claim fails — the board was off, or on another
+  protocol version — the board stays paired, unclaimed and silent ("not answering") until someone pairs it again
+  (`POST /api/nodes/pair` again fixed dustgate-serial-1). Retry the claim for a paired board that has never linked.
+
 - **A "lock the system" button (jeff, 2026-11-01).** One control in the app that stops every gate, servo and collector
   from moving or starting until it is unlocked — for blade changes, cleaning, or leaving the shop. Not needed yet. Think
   about: where it lives (always reachable, e.g. the Live header), what a locked shop does when a tool starts (nothing, and
