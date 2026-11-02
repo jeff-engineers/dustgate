@@ -296,7 +296,7 @@ const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 type Fitting = SelKind | 'tool' | 'duct';
 type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'secondaryPort'
               | 'addSystem' | 'findBoards' | 'rename' | 'moveSystem' | 'system' | 'boardSetup'
-              | 'unpairBoard' | 'deleteSystem';
+              | 'unpairBoard' | 'deleteSystem' | 'addServo';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -2761,6 +2761,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       { kind: 'moveSystem', label: 'Move to system…', enabled: systems.length > 1,
         note: systems.length > 1 ? undefined : 'only one system' },
       { kind: 'boardSetup', label: 'Board setup…', enabled: true, note: 'channels' },
+      // A bus board's servos are added here too (jeff, 2026-11-01): it is where the gate was just cabled to it.
+      ...(this.isBusBoard(id) ? [{ kind: 'addServo' as const, label: 'Add a servo…', enabled: gates > 0,
+            note: gates ? 'one new servo at a time' : 'cable a gate to it first' }] : []),
       { kind: 'unpairBoard', label: 'Unpair board…', enabled: gates === 0,
         note: gates ? `drives ${gates} ${gates === 1 ? 'gate' : 'gates'}` : undefined },
     ];
@@ -2879,6 +2882,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // is still the same menu, one level down.
     if (kind === 'findBoards') { this.closeMenu(); this.goBoards(); return; }
     if (kind === 'boardSetup') { this.closeMenu(); this.goBoards(); return; }
+    // Leaves the canvas: unsaved changes ask first (canLeave), because Add a servo saves the layout as the brain has it.
+    if (kind === 'addServo' && m.board) { const id = m.board; this.closeMenu(); void this.nav.navigate(['/boards/add-servo', id]); return; }
     // Not an edit either — it talks to the device, and undo can't take it back. Same
     // reason as the two above: no undo point may be left behind.
     if (kind === 'unpairBoard' && m.board) { const id = m.board; this.closeMenu(); void this.unpairBoard(id); return; }

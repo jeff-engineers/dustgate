@@ -949,6 +949,9 @@ export class ApiService {
   /** Drive a gate's servo to an angle, wherever it is: a bus servo by its number, a PWM one by its channel. */
   jogGate(sel: { controllerId: string; servo?: { channel?: number; bus?: number } }, angle: number): Promise<unknown> {
     const bus = sel.servo?.bus;
+    // A gate on a bus board has no channel; until a servo is added for it, it has no number either, and nothing to move.
+    if (bus === undefined && sel.servo?.channel === undefined)
+      return Promise.reject(new JogRefusedError('This gate has no servo yet. Add one from the board\'s menu or the Boards page first.'));
     return bus !== undefined ? this.jogBus(sel.controllerId, bus, angle) : this.jogServo(sel.servo?.channel ?? 0, angle, sel.controllerId);
   }
 

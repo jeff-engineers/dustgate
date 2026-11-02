@@ -146,7 +146,7 @@ public:
     bool assign(uint8_t to, const char*& err) {
         if (_p.ping(to) != Port::Heard::None) { err = "a servo already answers to that number on this board"; return false; }
         const Port::Heard h = _p.ping(topo::nodelink::kBusIdUnassigned);
-        if (h == Port::Heard::None)    { err = "no new servo answered - check it is plugged in and the board's 12 V is on"; return false; }
+        if (h == Port::Heard::None)    { err = "no new servo answered - check its plug, the board's 12 V, and that the board sits fully in its servo driver"; return false; }
         if (h == Port::Heard::Garbled) { err = "more than one new servo is plugged in - unplug all but one"; return false; }
         if (!_p.renumber(topo::nodelink::kBusIdUnassigned, to) || _p.ping(to) != Port::Heard::One) {
             err = "the servo did not take its new number - try again"; return false;

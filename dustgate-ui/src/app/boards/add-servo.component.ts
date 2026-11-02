@@ -100,7 +100,7 @@ export function tieServo(gate: ConfigurableSelector, n: number): void {
       <div class="callout bad" *ngIf="step === 'garbled'"><b>Two new servos are plugged in.</b> Only one can be added at a
         time. Unplug all but one and look again.</div>
       <div class="callout warn" *ngIf="step === 'none'"><b>No new servo answered.</b> Check it is plugged into this board's
-        chain and that the board's 12 V is on.</div>
+        chain, that the board's 12 V is on, and that the board is pushed fully into its servo driver.</div>
       <div class="callout bad" *ngIf="step === 'failed'">{{ error }}</div>
       <div class="btns"><button class="btn primary" type="button" (click)="look()">Look again</button>
         <button class="btn" type="button" (click)="restart()">Back</button></div>
