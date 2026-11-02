@@ -588,6 +588,100 @@
      "kMaxFailsafeGates"
     ]
    ]
+  },
+  {
+   "name": "bus servos per board",
+   "refs": [
+    [
+     "shared/device-model/topology.js",
+     "MAX_BUS_SERVOS_PER_HOST"
+    ],
+    [
+     "shared/device-model/nodelink.js",
+     "MAX_BUS_SERVOS_PER_NODE"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kMaxBusServos"
+    ]
+   ]
+  },
+  {
+   "name": "bus servo number: unassigned",
+   "refs": [
+    [
+     "shared/device-model/topology.js",
+     "BUS_ID_UNASSIGNED"
+    ],
+    [
+     "shared/device-model/nodelink.js",
+     "BUS_ID_UNASSIGNED"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kBusIdUnassigned"
+    ]
+   ]
+  },
+  {
+   "name": "bus servo number: lowest",
+   "refs": [
+    [
+     "shared/device-model/topology.js",
+     "MIN_BUS_ID"
+    ],
+    [
+     "shared/device-model/nodelink.js",
+     "MIN_BUS_ID"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kMinBusId"
+    ]
+   ]
+  },
+  {
+   "name": "bus servo number: highest",
+   "refs": [
+    [
+     "shared/device-model/topology.js",
+     "MAX_BUS_ID"
+    ],
+    [
+     "shared/device-model/nodelink.js",
+     "MAX_BUS_ID"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kMaxBusId"
+    ]
+   ]
+  },
+  {
+   "name": "bus servo angle ceiling",
+   "refs": [
+    [
+     "shared/device-model/nodelink.js",
+     "MAX_BUS_ANGLE"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kMaxBusAngle"
+    ]
+   ]
+  },
+  {
+   "name": "bus report cadence",
+   "refs": [
+    [
+     "shared/device-model/nodelink.js",
+     "BUS_REPORT_MS"
+    ],
+    [
+     "firmware/control/NodeLink.h",
+     "kBusReportMs"
+    ]
+   ]
   }
  ]
 }

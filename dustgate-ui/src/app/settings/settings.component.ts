@@ -4,6 +4,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { ApiService, Topology } from '../services/api.service';
+import { DevModeService, devModeOf } from '../services/dev-mode';
 import { FAILSAFE_BOUNDS, SERVO_PULSE_BOUNDS, failsafeCloseMs, servoPulseRange } from '@shop';
 
 /**
@@ -78,6 +79,9 @@ import { FAILSAFE_BOUNDS, SERVO_PULSE_BOUNDS, failsafeCloseMs, servoPulseRange }
       color: var(--muted);
     }
     .section.danger { border-color: var(--danger); }
+    .section.dev { border: 1px dashed var(--dev); background: var(--dev-bg); }
+    .section.dev .section-title { color: var(--dev); }
+    .dev-check { width: 22px; height: 22px; accent-color: var(--dev); flex: none; }
     .section.danger .section-title { color: var(--danger); }
 
     .row {
@@ -219,10 +223,24 @@ import { FAILSAFE_BOUNDS, SERVO_PULSE_BOUNDS, failsafeCloseMs, servoPulseRange }
            being calibrated. Coast-down left with it: it lives on each collector,
            edited where that collector is set up. -->
 
-      <!-- SERVOS (2026-10-07): the pulse range every PWM gate is driven over. One number pair for the shop, because a
-           shop buys its servos as one multipack (jeff). Kept in the layout, so it reaches every board on the next move. -->
+      <!-- DEVELOPER MODE (2026-11-01): a shop setting, so every phone sees the same. It reveals the numbers and controls
+           below and on the Boards and Live pages; nothing it shows is needed to run a shop. -->
       <div class="section">
-        <span class="section-title">Servos</span>
+        <span class="section-title">Developer mode</span>
+        <div class="row">
+          <label class="row-label" for="devmode">Show servo load, raw readings and settings most shops never need</label>
+          <input id="devmode" type="checkbox" class="dev-check" [ngModel]="devMode" (ngModelChange)="saveDevMode($event)"
+                 [disabled]="busy || !servoLoaded">
+        </div>
+        <div class="row-hint">For every phone in the shop.</div>
+      </div>
+
+      <!-- SERVOS (2026-10-07): the pulse range every PWM gate is driven over. One number pair for the shop, because a
+           shop buys its servos as one multipack (jeff). Kept in the layout, so it reaches every board on the next move.
+           In developer mode only since 2026-11-01: with gates inside 180° it should rarely be needed, and out of sight
+           it is not changed by accident. -->
+      <div class="section dev" *ngIf="devMode">
+        <span class="section-title">PWM servo pulse range</span>
         <div class="row-hint">
           The pulse each gate servo gets at the two ends of its swing. Wider lets a servo turn further; too wide drives it
           into its own stop at the ends. Recalibrate your gates after changing it — the same angle lands somewhere new.
@@ -328,8 +346,17 @@ export class SettingsComponent implements OnInit {
   constructor(
     public api: ApiService,
     private router: Router,
-    private cd: ChangeDetectorRef
+    private cd: ChangeDetectorRef,
+    private dev: DevModeService,
   ) {}
+
+  // ── developer mode ─────────────────────────────────────────────────────
+  devMode = false;
+  async saveDevMode(on: boolean): Promise<void> {
+    await this.run(() => this.dev.set(on), 'busy', on ? 'Developer mode is on, for every phone in the shop.' : 'Developer mode is off.');
+    this.devMode = this.dev.on$.value;
+    this.cd.markForCheck();
+  }
 
   // ── servo pulse range ──────────────────────────────────────────────────
   readonly bounds = SERVO_PULSE_BOUNDS;
@@ -396,6 +423,8 @@ export class SettingsComponent implements OnInit {
       this.servoMin = this.savedServo.minUs; this.servoMax = this.savedServo.maxUs;
       this.savedFailsafeMs = failsafeCloseMs(t);
       this.failsafeSec = this.savedFailsafeMs / 1000;
+      this.devMode = devModeOf(t);
+      this.dev.on$.next(this.devMode);
       this.servoLoaded = true;
       this.cd.markForCheck();
     }).catch(() => { /* no layout yet: nothing to save the range into, and Save stays off */ });

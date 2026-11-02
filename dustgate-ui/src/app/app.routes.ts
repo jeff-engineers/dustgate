@@ -7,6 +7,8 @@ import { BuildComponent } from './build/build.component';
 import { ToolSetupComponent } from './tools/tool-setup.component';
 import { BoardSetupComponent } from './boards/board-setup.component';
 import { BrainLogComponent } from './boards/brain-log.component';
+import { ServoPageComponent } from './boards/servo-page.component';
+import { AddServoComponent } from './boards/add-servo.component';
 import { GateListComponent } from './gates/gate-list.component';
 
 // EVERY SCREEN IS IN THE ONE BUNDLE (2026-10-03). These were lazy `import()`s,
@@ -33,6 +35,10 @@ export const routes: Routes = [
   // The brain's serial output over WiFi — a bench and support screen, reached
   // only from the brain's row in Your boards. docs/mockups/archived/brain-log.html.
   { path: 'boards/log',   component: BrainLogComponent },
+  // One bus servo, by its board and the gate it drives (or bus-N for one no gate holds). docs/mockups/bus-chain.html.
+  { path: 'boards/servo/:board/:gate', component: ServoPageComponent },
+  // Add a servo for a gate on a bus board, or replace one (?gate=…&replace=1).
+  { path: 'boards/add-servo/:board', component: AddServoComponent },
   { path: 'settings',     component: SettingsComponent },
 
   // /gates is BACK, and not as the screen that was retired. That one was a "set up

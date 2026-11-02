@@ -54,7 +54,7 @@ public:
         char     board[24];
         char     fw[24];
         int      capServos;
-        int      capLinear;
+        int      capBus;       // bus servos it can drive (WELCOME caps.bus); 0 = a PWM board
         int      capClamps;     // caps.ct — 0 for every board flashed before 2026-09-15
         // Is a clamp plugged into its jack (the CLAMP frame, 2026-10-09)? -1 unknown — never reported, or the link is
         // down — which is NOT "unplugged": a board on older firmware simply never says. 0 empty, 1 plugged in.
@@ -91,7 +91,7 @@ public:
     void configure(const char* nodeId, const char* primaryId) {
         const bool same = std::strcmp(_nodeId, nodeId ? nodeId : "") == 0;
         if (!same) {
-            _capJoin = _capRf = _capBin = _capPlugs = _capClamps = _capServos = _capLinear = 0;
+            _capJoin = _capRf = _capBin = _capPlugs = _capClamps = _capServos = _capBus = 0;
             _board[0] = _fw[0] = '\0';
         }
         nodelink::strlcpy_(_nodeId,    nodeId    ? nodeId    : "", sizeof(_nodeId));
@@ -189,7 +189,8 @@ public:
         // ArduinoJson parse that does not fit FAILS (NoMemory), so a node that gained two capability flags
         // would have read as "no frame" — never linking, with nothing anywhere saying why. Caught by the
         // host test of this class. The link task's stack has ~1.3 KB to spare, so it is not spent here.
-        DynamicJsonDocument doc(768);
+        // 2048 since 2026-11-01: a BUS report of six servos is ~70 members, and a parse that does not fit fails whole.
+        DynamicJsonDocument doc(2048);
         if (deserializeJson(doc, json, len)) return false;   // malformed → ignore
         JsonObjectConst f = doc.as<JsonObjectConst>();
         const char* t = f["t"].as<const char*>();
@@ -202,6 +203,9 @@ public:
         if (std::strcmp(t, "CLAMP") == 0)    { onClamp(f); return false; }
         if (std::strcmp(t, "OTASTATE") == 0) { onOtaState(f); return false; }
         if (std::strcmp(t, "STATE") == 0)    { onState(f); return false; }
+        if (std::strcmp(t, "BUS") == 0)      { onBus(f); return false; }
+        if (std::strcmp(t, "PONG") == 0)     { onLinkPong(f); return false; }
+        if (std::strcmp(t, "SERVOREPLY") == 0) { onServoReply(f); return false; }
         return false;   // unknown frame — ignore rather than guess
     }
 
@@ -220,6 +224,15 @@ public:
         }
         if (_otaPending)   { out = _otaFrame;   _otaPending   = false; say(label("[NODE→] OTA to "));    return true; }
         if (_pressPending) { out = _pressFrame; _pressPending = false; return true; }
+        if (_servoPending) { out = _servoFrame; _servoPending = false; say(label("[NODE→] SERVO to ")); return true; }
+        // The link check (2026-11-01): a PING every kLinkPingMs, answered by a PONG with the board's signal and its own
+        // count of drops. One unanswered is a lost message; developer mode shows the count.
+        if ((uint32_t)(now() - _lastLinkPingMs) >= kLinkPingMs) {
+            if (_pingAwaited) _pingsLost++;
+            _lastLinkPingMs = now(); _pingAwaited = true;
+            out = "{\"t\":\"PING\"}";
+            return true;
+        }
         if (_alertPending) {
             StaticJsonDocument<384> d; nodelink::buildAlert(d.to<JsonObject>(), _light);
             out.clear(); serializeJson(d, out); _alertPending = false;
@@ -251,6 +264,38 @@ public:
         if (_jogOutstanding && (now() - _jogStartedMs) > kJogTimeoutMs) _jogOutstanding = false;
     }
 
+    // ── bus servos and the link (2026-11-01) ────────────────────────────────
+    // A bus servo as last reported, and the peak of each of its last kBusHistory moves, oldest first.
+    static const size_t kBusHistory = 20;
+    struct BusServo {
+        nodelink::BusServoReport r;
+        uint32_t lastMoves = 0;
+        uint8_t  history[kBusHistory] = {0};
+        size_t   nHistory = 0;
+    };
+    size_t busCount() const { return _nBus; }
+    const BusServo& busServo(size_t i) const { return _bus[i]; }
+    struct LinkStats { int rssi = 0; long nodeDrops = -1; uint32_t pingsLost = 0; };   // rssi 0 / drops -1 = not reported
+    LinkStats link() const { LinkStats l; l.rssi = _rssi; l.nodeDrops = _nodeDrops; l.pingsLost = _pingsLost; return l; }
+
+    // A SERVO order (nodelink.js servo()). Returns its seq, 0 when the link is down or one is already waiting to go.
+    uint32_t servo(const char* op, int bus, int to, int onFlag) {
+        if (!online() || _servoPending) return 0;
+        StaticJsonDocument<160> d;
+        d["t"] = "SERVO"; d["seq"] = ++_seq; d["op"] = op;
+        if (bus) d["bus"] = bus;
+        if (to)  d["to"]  = to;
+        if (onFlag >= 0) d["on"] = onFlag == 1;
+        std::string s; serializeJson(d, s);
+        if (s.size() >= sizeof(_servoFrame)) return 0;
+        nodelink::strlcpy_(_servoFrame, s.c_str(), sizeof(_servoFrame));
+        _servoPending = true;
+        _servoReply.clear(); _servoReplySeq = 0;
+        return d["seq"].as<uint32_t>();
+    }
+    // The reply to SERVO `seq` as the node sent it (JSON), or "" while it has not come.
+    std::string servoReply(uint32_t seq) const { return seq && seq == _servoReplySeq ? _servoReply : std::string(); }
+
     // ── ActuatorBus, as the session answers it ──────────────────────────────
     bool online() const { return _connected && (now() - _lastRxMs) < nodelink::kPongTimeoutMs; }
     bool busy()   const { return _moveOutstanding || _txPending; }
@@ -271,7 +316,8 @@ public:
         if (!nodelink::buildSetFrame(doc.to<JsonObject>(), ++_seq, selectorId, sel, stateId)) {
             return false;   // uncalibrated — refuse rather than send a guess
         }
-        if (_servoMinUs && _eq(doc["drive"], "servo")) { doc["minUs"] = _servoMinUs; doc["maxUs"] = _servoMaxUs; }
+        // PWM only: a bus servo has no pulse to range, and a node refuses a SET that names a bus servo with one.
+        if (_servoMinUs && _eq(doc["drive"], "servo") && doc.containsKey("channel")) { doc["minUs"] = _servoMinUs; doc["maxUs"] = _servoMaxUs; }
         std::string s; serializeJson(doc, s);
         if (s.size() >= sizeof(_txFrame)) return false;
         nodelink::strlcpy_(_txFrame, s.c_str(), sizeof(_txFrame));
@@ -287,6 +333,21 @@ public:
     // The shop's servo pulse range, put on every servo SET and jog from here on (NodeLink.h, kDefaultServoMinUs).
     void setServoPulseRange(int minUs, int maxUs) {
         if (nodelink::servoRangeOk(minUs, maxUs)) { _servoMinUs = minUs; _servoMaxUs = maxUs; }
+    }
+
+    // A setup-time move of a BUS servo to an angle (0..kMaxBusAngle) — Set positions on a bus valve. Tracked like jog().
+    bool jogBus(int bus, int angle) {
+        if (!online() || !nodelink::busIdOk(bus) || angle < 0 || angle > nodelink::kMaxBusAngle) return false;
+        StaticJsonDocument<256> doc;
+        JsonObject o = doc.to<JsonObject>();
+        o["t"] = "SET"; o["seq"] = ++_seq; o["selectorId"] = "__jog"; o["stateId"] = "__jog";
+        o["drive"] = "servo"; o["bus"] = bus; o["angle"] = angle; o["holdAtRest"] = true;
+        std::string s; serializeJson(doc, s);
+        if (s.size() >= sizeof(_txFrame)) return false;
+        nodelink::strlcpy_(_txFrame, s.c_str(), sizeof(_txFrame));
+        _txPending = true;
+        _jogOutstanding = true; _jogStartedMs = now();
+        return true;
     }
 
     bool jog(int channel, int angle, bool detach) {
@@ -472,7 +533,7 @@ public:
         nodelink::strlcpy_(n.board, _board, sizeof(n.board));
         nodelink::strlcpy_(n.fw,    _fw,    sizeof(n.fw));
         n.capServos = _capServos;
-        n.capLinear = _capLinear;
+        n.capBus = _capBus;
         n.capClamps = _capClamps;
         n.clampIn   = _clampIn;
         n.capRf     = _capRf > 0;
@@ -537,7 +598,11 @@ private:
         nodelink::strlcpy_(_board, f["board"] | "", sizeof(_board));
         nodelink::strlcpy_(_fw,    f["fw"]    | "", sizeof(_fw));
         _capServos = f["caps"]["servos"] | 0;
-        _capLinear = f["caps"]["linear"] | 0;
+        _capBus = f["caps"]["bus"] | 0;
+        // A slider board on firmware from before bus servos says `linear: 1` and nothing of `bus`. It IS a bus board, and
+        // reading it as one keeps the layout from calling it a PWM board (which refuses its own sliding gate) and gives
+        // it the bus image on Update, not the PWM one (found 2026-11-01, while the shop's slider still ran old firmware).
+        if (!_capBus && (f["caps"]["linear"] | 0) > 0) _capBus = nodelink::kMaxBusServos;
         // Absent means none: a board flashed before clamps existed answers exactly as it always did
         // rather than being read as broken.
         _capClamps = f["caps"]["ct"] | 0;
@@ -589,6 +654,7 @@ private:
         _moveFault   = nullptr;
         _everLinked  = true;
         _connected   = true;
+        _lastLinkPingMs = now(); _pingAwaited = false;   // the first link check comes kLinkPingMs after the link is up
         _downSinceMs = 0;
         _hollowDrops = 0;
         // Re-arm the CONFIG on every accepted handshake: this node may have just rebooted, and a node
@@ -732,6 +798,44 @@ private:
         out[n] = '\0';
     }
 
+    // A BUS report: keep it, and when a servo's move count rose, add its peak to that servo's history and log it. Load is
+    // LOGGED, not judged (jeff, 2026-11-01): no "working harder than usual" until real shop numbers pick the line.
+    void onBus(JsonObjectConst f) {
+        for (JsonObjectConst sv : f["servos"].as<JsonArrayConst>()) {
+            const int id = sv["id"] | 0;
+            if (!nodelink::busIdOk(id)) continue;
+            BusServo* b = nullptr;
+            for (size_t i = 0; i < _nBus; i++) if (_bus[i].r.id == id) b = &_bus[i];
+            if (!b) { if (_nBus >= (size_t)nodelink::kMaxBusServos) continue; b = &_bus[_nBus++]; *b = BusServo(); }
+            nodelink::BusServoReport& r = b->r;
+            r.id = id; r.ok = sv["ok"] | false;
+            r.deg = sv["deg"] | 0.0f; r.load = sv["load"] | 0; r.peak = sv["peak"] | 0;
+            r.v = sv["v"] | 0.0f; r.temp = sv["temp"] | 0;
+            r.missed = sv["missed"] | 0u; r.reads = sv["reads"] | 0u; r.moves = sv["moves"] | 0u;
+            if (r.moves > b->lastMoves) {
+                // The node restarting resets its count; any rise is at least one new move, and only the last one's peak
+                // is known, so it is recorded once.
+                if (b->nHistory == kBusHistory) { for (size_t k = 1; k < kBusHistory; k++) b->history[k - 1] = b->history[k]; b->nHistory--; }
+                b->history[b->nHistory++] = (uint8_t)(r.peak < 0 ? 0 : r.peak > 100 ? 100 : r.peak);
+                char line[128];
+                std::snprintf(line, sizeof(line), "[BUS] %s servo %d moved: peak load %d%%, now at %.0f deg, %.1f V",
+                              _nodeId, id, r.peak, r.deg, r.v);
+                say(line);
+            }
+            b->lastMoves = r.moves;
+        }
+    }
+    void onLinkPong(JsonObjectConst f) {
+        _pingAwaited = false;
+        if (f["rssi"].is<int>())  _rssi = f["rssi"].as<int>();
+        if (f["drops"].is<long>()) _nodeDrops = f["drops"].as<long>();
+    }
+    void onServoReply(JsonObjectConst f) {
+        _servoReplySeq = f["seq"] | 0u;
+        _servoReply.clear(); serializeJson(f, _servoReply);
+        say((std::string("[NODE] ") + _nodeId + " " + _servoReply).c_str());
+    }
+
     Clock        _clock;
     SessionSink* _sink;
     mutable char _lbl[96] = "";
@@ -813,13 +917,27 @@ private:
     char     _board[24]  = "";
     char     _fw[24]     = "";
     int      _capServos  = 0;
-    int      _capLinear  = 0;
+    int      _capBus     = 0;
     int      _capClamps  = 0;   // caps.ct
     int      _clampIn    = -1;  // CLAMP: -1 unknown, 0 empty jack, 1 plugged in
     int      _capPlugs   = 0;   // caps.plug — 1 if it polls plugs for us; absent = 0
     int      _capJoin    = 0;   // caps.join — 1 if it dials us itself
     int      _capRf      = 0;   // caps.rf   — 1 if it has a transmitter for the collector's remote
     int      _capBin     = 0;   // caps.bin  — 1 if it has a dust-bin pad
+
+    // Bus servos, the link check and SERVO orders (2026-11-01).
+    BusServo _bus[nodelink::kMaxBusServos];
+    size_t   _nBus = 0;
+    static constexpr uint32_t kLinkPingMs = 10000;
+    uint32_t _lastLinkPingMs = 0;
+    bool     _pingAwaited    = false;
+    uint32_t _pingsLost      = 0;
+    int      _rssi           = 0;
+    long     _nodeDrops      = -1;
+    char     _servoFrame[160] = "";
+    bool     _servoPending   = false;
+    uint32_t _servoReplySeq  = 0;
+    std::string _servoReply;
 };
 
 }  // namespace topo

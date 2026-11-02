@@ -33,6 +33,14 @@ Update it in the same session as the bench that proves something.
   press policy correcting an inverted belief); **the shop on a Raspberry Pi since 2026-10-11**, including node OTA
   updates, optional boards (a board with no gate switched off raises nothing), and the servo pulse range from Settings.
 - **The status screen** on a C5 (D4/D5), wake button on D1.
+- **Bus servos on a bus board** (`xiao_c5_bus` on Seeed's Bus Servo Driver Board, one ST3215, through the Pi brain),
+  2026-11-01: Add a servo found a factory-fresh servo and numbered it (2), set-up moves from the app across its whole turn
+  (about 70, each arriving, 19–21% peak load at 12.2 V, no missed reads in 2,300), the positions saved, and the board armed
+  its fail-closed plan with the bus gate. The old PWM boards linked to the new brain unchanged (NodeLink stayed at
+  version 1). Not run yet: a tool routing the manifold from the Live page, a valve and the slider asked at once, a servo
+  unplugged mid-move, Replace a servo, two servos on one chain, and the bench console's fixed `setid`. Seen once and not
+  since: the board stopped acknowledging the brain for ~40 s just after a servo was numbered (now logged as `[LOOP] slow
+  pass` if it recurs).
 
 **Not yet proven:** a PRESS never replaying across a link drop (unit-tested only); the collector sensed by a CT clamp
 (the Shelly + contactor build); node plug polling under a load; anything under load; 9 V vs 12 V; the 4" manifold.

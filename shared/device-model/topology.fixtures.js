@@ -17,7 +17,7 @@ const primary = { id: 'primary', role: 'primary', name: 'Shop Brain', board: 'de
 
 // The same brain, flashed for the rack. A board is one or the other from the
 // moment it is flashed — see Controller.drives in topology.js.
-const sliderPrimary = { ...primary, drives: 'linear' };
+const sliderPrimary = { ...primary, drives: 'bus' };
 
 // The second board the feed chain needs. A slider host drives a serial bus and a
 // servo host drives PWM, and one ESP32 cannot do both — the two personalities
@@ -33,7 +33,7 @@ const servoNode = {
 // the gate, and no PWM channels at all.
 const sliderNode = {
   id: 'slider1', role: 'secondary', name: 'Slider Node', board: 'xiao_c5',
-  drives: 'linear',
+  drives: 'bus',
   link: { transport: 'wifi-ws', host: 'dustgate-slider-1.local' },
 };
 

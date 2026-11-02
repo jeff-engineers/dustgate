@@ -35,3 +35,15 @@ export interface RedundantSelector { id: string; name: string; }
  * Advisory: a redundant gate is still a valid, working shop.
  */
 export function redundantSelectors(t: Topology): RedundantSelector[];
+
+/** A PWM board's servo channels; a board's sliders (PWM: none; bus: this many). */
+export const MAX_SERVOS_PER_HOST: number;
+export const MAX_LINEAR_PER_HOST: number;
+/** A bus board: servos across its chains, and chains leaving it. */
+export const MAX_BUS_SERVOS_PER_HOST: number;
+export const MAX_BUS_CHAINS: number;
+/** Bus servo numbers are shop-wide; 1 is every servo's factory number, so "not yet assigned". */
+export const BUS_ID_UNASSIGNED: number;
+export const MIN_BUS_ID: number;
+export const MAX_BUS_ID: number;
+export const CONTROLLER_DRIVES: readonly ('servo' | 'bus')[];

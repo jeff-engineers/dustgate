@@ -13,6 +13,11 @@ struct Fake : Backend {
   bool jog(const std::string& c, int ch, int a, bool d, std::string& why) override {
     calls.push_back("jog:" + c + ":" + std::to_string(ch) + ":" + std::to_string(a) + (d ? ":detach" : "")); why = jogWhy; return jogOk; }
   void resetAll() override { calls.push_back("reset"); }
+  bool jogBus(const std::string& c, int bus, int a, std::string&) override { calls.push_back("jogbus:" + c + ":" + std::to_string(bus) + ":" + std::to_string(a)); return true; }
+  uint32_t servoOp(const std::string& c, const char* op, int bus, int to, int on, std::string&) override {
+    calls.push_back(std::string("servo:") + c + ":" + op + ":" + std::to_string(bus) + ":" + std::to_string(to) + ":" + std::to_string(on)); return 7;
+  }
+  std::string servoReply(const std::string& c, uint32_t seq) override { return c == "n1" && seq == 7 ? R"({"t":"SERVOREPLY","seq":7,"ok":true})" : ""; }
   void pairNode(const std::string& h, const std::string& n, bool r, bool t) override { calls.push_back("pair:" + h + ":" + n + (r ? ":remove" : "") + (t ? ":takeover" : "")); }
   void pauseLinks(bool p) override { calls.push_back(p ? "pause" : "resume"); }
   bool linOk = true; bool moving = false;
@@ -51,6 +56,17 @@ int main() {
     ok_("an angle outside 0-180 is refused before it reaches a servo", run(f, "POST", "/api/servo/jog", R"({"channel":0,"angle":181})").status == 400);
     ok_("a negative channel is refused", run(f, "POST", "/api/servo/jog", R"({"channel":-1,"angle":10})").status == 400);
     ok_("a missing angle is refused", run(f, "POST", "/api/servo/jog", R"({"channel":0})").status == 400);
+    // Bus servos (2026-11-01): by number, a whole turn of angle; SERVO orders bounded as the board bounds them.
+    ok_("a bus jog carries the servo's number and an angle past 180", run(f, "POST", "/api/servo/jog", R"({"controllerId":"n1","bus":4,"angle":270})").status == 200 && f.calls.back() == "jogbus:n1:4:270");
+    ok_("a bus jog to servo 1 is refused", run(f, "POST", "/api/servo/jog", R"({"controllerId":"n1","bus":1,"angle":90})").status == 400);
+    ok_("a bus jog past 359 is refused", run(f, "POST", "/api/servo/jog", R"({"controllerId":"n1","bus":4,"angle":360})").status == 400);
+    const Response so = run(f, "POST", "/api/servo/op", R"({"controllerId":"n1","op":"assign","to":12})");
+    ok_("a SERVO order answers its seq", so.status == 200 && so.body == R"({"seq":7})" && f.calls.back() == "servo:n1:assign:0:12:-1");
+    ok_("torque carries on", run(f, "POST", "/api/servo/op", R"({"controllerId":"n1","op":"torque","bus":4,"on":false})").status == 200 && f.calls.back() == "servo:n1:torque:4:0:0");
+    ok_("an unknown op is refused", run(f, "POST", "/api/servo/op", R"({"controllerId":"n1","op":"spin"})").status == 400);
+    ok_("assign to 1 is refused", run(f, "POST", "/api/servo/op", R"({"controllerId":"n1","op":"assign","to":1})").status == 400);
+    ok_("the reply, once it came", run(f, "GET", "/api/servo/reply?controllerId=n1&seq=7").body == R"({"done":true,"reply":{"t":"SERVOREPLY","seq":7,"ok":true}})");
+    ok_("...and before", run(f, "GET", "/api/servo/reply?controllerId=n1&seq=8").body == R"({"done":false})");
     f.jogOk = false; f.jogWhy = "no servo support on this brain";
     ok_("a brain with no servos of its own says 501", run(f, "POST", "/api/servo/jog", R"({"channel":0,"angle":10})").status == 501);
     f.jogWhy = "that board is not linked";

@@ -9,6 +9,10 @@ import { airflowIssues } from '@topology';
 import { collectorPlugState } from '@topology-device';
 import { validateShop } from '@shop';
 import { configurableSelectorsOf, isCalibrated } from '../gates/selector-types';
+import { DevModeService } from '../services/dev-mode';
+import { busGatesOfMachine, usualLoad } from '../boards/bus-servos';
+import type { BusServoState } from '../services/bus-types';
+import { Subscription } from 'rxjs';
 import { type ShopDoc, machinesOf, portsOf, primaryPortOf, systemViews,
          systemsInLayoutOrder, toShop } from '../services/shop-doc';
 
@@ -232,6 +236,11 @@ const POLL_MS = 2000;
     .r-body { flex: 1; min-width: 0; }
     .r-name { font-size: 16px; font-weight: 500; }
     .r-src { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+    .r-load { display: flex; align-items: center; gap: 8px; margin-top: 4px; position: relative; z-index: 1; pointer-events: none; }
+    .r-load .track { position: relative; width: 70px; height: 6px; border-radius: 3px; background: #262626; flex: none; }
+    .r-load .fill { position: absolute; inset: 0 auto 0 0; background: var(--success); border-radius: 3px; max-width: 100%; }
+    .r-load .usual { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); opacity: .6; }
+    .r-load .lbl { font-size: 11px; color: var(--dev); font-variant-numeric: tabular-nums; }
     .rowwrap.collecting .r-name { color: var(--success); }
     /* A tool with no gate can't be hand-run — the row is inert, and reads that
        way rather than looking like a control that ignores you. The dimming is on
@@ -482,6 +491,13 @@ const POLL_MS = 2000;
                   }}<a [routerLink]="['/tools']" [queryParams]="{ el: t.id }"
                        [title]="'Pair a smart outlet with ' + t.name + ', so it starts collection on its own'"
                        >{{ pairHint }}</a>{{ sourceTail(t, g) }}</div>
+                <!-- Developer mode: the load of this tool's bus gate on its last move. Logged, not judged (jeff,
+                     2026-11-01), so it never turns amber. -->
+                <div class="r-load" *ngIf="loadOf(t) as l" [title]="l.name + ': peak load of its last move'">
+                  <span class="track"><span class="fill" [style.width.%]="l.last"></span>
+                    <span class="usual" *ngIf="l.usual !== null" [style.left.%]="l.usual"></span></span>
+                  <span class="lbl">{{ l.name }} · {{ l.last }}%<ng-container *ngIf="l.usual !== null"> · usual {{ l.usual }}</ng-container></span>
+                </div>
               </div>
               <span class="chip" [class]="'chip ' + toolChipTone(t, g)">{{ toolChipText(t, g) }}</span>
             </div>
@@ -618,10 +634,32 @@ export class LiveViewComponent implements OnInit, OnDestroy {
   private poll: ReturnType<typeof setInterval> | null = null;
   private busy = false;
 
-  constructor(private api: ApiService) {}
+  constructor(private api: ApiService, private devMode: DevModeService) {}
+
+  // ── developer mode: each tool's bus gate, with its last move's load (2026-11-01) ──
+  dev = false;
+  private devSub: Subscription | null = null;
+  private shopDoc: Topology | null = null;
+  private busByGate = new Map<string, BusServoState>();   // "controllerId:number" → its report
+  /** The load meter for a tool's bus gate, in developer mode only: its last move's peak against its usual. */
+  loadOf(t: ToolRow): { name: string; last: number; usual: number | null } | null {
+    if (!this.dev || !this.shopDoc) return null;
+    const g = busGatesOfMachine(this.shopDoc as never, t.id)[0];
+    const st = g ? this.busByGate.get(`${g.controllerId}:${g.bus}`) : undefined;
+    return g && st && st.moves ? { name: g.name, last: st.peak, usual: usualLoad(st.history) } : null;
+  }
+  private async refreshBus(): Promise<void> {
+    if (!this.dev) return;
+    try {
+      const nodes = await this.api.getNodes();
+      this.busByGate = new Map(nodes.flatMap((n) => (n.bus ?? []).map((b) => [`${n.id}:${b.id}`, b] as [string, BusServoState])));
+    } catch { /* a missed read leaves the last meters; the next poll tries again */ }
+  }
 
   async ngOnInit(): Promise<void> {
     // No whenReady() here: every request waits for the API key itself, and gives up as "didn't answer" (api.service).
+    this.devMode.load();
+    this.devSub = this.devMode.on$.subscribe((on) => { this.dev = on; void this.refreshBus(); });
     await this.loadTopology();
     await this.refresh();
     // STARTED UNCONDITIONALLY, and that is the fix rather than a detail.
@@ -656,17 +694,19 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     // reader, not an absent shop, and swallowing it as "no topology configured"
     // is what would hide it — the empty state looks identical either way.
     const topo = toShop(doc);
-    if (topo) this.parseTopology(topo as unknown as Topology);
+    if (topo) { this.shopDoc = topo as unknown as Topology; this.parseTopology(topo as unknown as Topology); }
   }
 
   /** One poll. Picks the layout up first if we still haven't got one. */
   private async tick(): Promise<void> {
     if (!this.tools.length) await this.loadTopology();
     await this.refresh();
+    await this.refreshBus();
   }
 
   ngOnDestroy(): void {
     if (this.poll) clearInterval(this.poll);
+    this.devSub?.unsubscribe();
   }
 
   /**

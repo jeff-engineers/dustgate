@@ -57,7 +57,7 @@ that would tell a stranger what broke and how the symptom pointed away from the
 cause is the right length. Reference the review section (`Review §2.2.`) as the
 last line so the reasoning is findable.
 
-Say plainly what was and was not verified. "Compiles for xiao_c5_linear. Not
+Say plainly what was and was not verified. "Compiles for xiao_c5_bus. Not
 bench-tested" is a complete and honest statement; "fixed" on its own is not.
 
 ## 4. Verify per fix, not at the end

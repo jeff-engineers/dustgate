@@ -142,7 +142,7 @@ const eq = (name, got, want) =>
   check('SET is rejected in the s2p direction',
         NL.validateFrame(NL.set(1, gate, 'open', 10), 's2p').length > 0);
   check('WELCOME is rejected in the p2s direction',
-        NL.validateFrame(NL.welcome('n1', 'devkitc', '1.0.0', { servos: 4, linear: 1 }), 'p2s').length > 0);
+        NL.validateFrame(NL.welcome('n1', 'devkitc', '1.0.0', { servos: 0, bus: 6 }), 'p2s').length > 0);
   check('unknown frame type is rejected', NL.validateFrame({ t: 'NOPE' }, 'p2s').length > 0);
   check('non-object is rejected', NL.validateFrame(null, 'p2s').length > 0);
 }
@@ -151,7 +151,7 @@ const eq = (name, got, want) =>
 {
   eq('HELLO is valid', NL.validateFrame(NL.hello('primary', 'node2'), 'p2s'), []);
   eq('WELCOME is valid',
-     NL.validateFrame(NL.welcome('node2', 'devkitc', '1.0.0', { servos: 4, linear: 1 }), 's2p'), []);
+     NL.validateFrame(NL.welcome('node2', 'devkitc', '1.0.0', { servos: 0, bus: 6 }), 's2p'), []);
   eq('ACK is valid', NL.validateFrame(NL.ack(3, true), 's2p'), []);
   eq('ACK with an error is valid', NL.validateFrame(NL.ack(3, false, 'nope'), 's2p'), []);
   eq('STATE is valid', NL.validateFrame(NL.state('gate1', 'open', false), 's2p'), []);
@@ -162,7 +162,7 @@ const eq = (name, got, want) =>
   check('HELLO with a wrong version is rejected',
         NL.validateFrame({ ...NL.hello('p', 'n'), v: 99 }, 'p2s').length > 0);
   check('WELCOME with a wrong version is rejected',
-        NL.validateFrame({ ...NL.welcome('n', 'b', 'f', { servos: 0, linear: 0 }), v: 99 }, 's2p').length > 0);
+        NL.validateFrame({ ...NL.welcome('n', 'b', 'f', { servos: 0, bus: 0 }), v: 99 }, 's2p').length > 0);
   check('WELCOME with no caps is rejected',
         NL.validateFrame({ t: 'WELCOME', v: NL.NODELINK_VERSION, nodeId: 'n', board: 'b' }, 's2p').length > 0);
 }
@@ -186,7 +186,7 @@ const eq = (name, got, want) =>
      NL.validateFrame({ ...h, takeover: 'yes' }, 'p2s').length, 1);
 }
 {
-  const caps = { servos: 4, linear: 0 };
+  const caps = { servos: 4, bus: 0 };
   const accepted = NL.welcome('node-1', 'qtpy_s3', '1.0.0', caps, 'dustgate-shop');
   check('an accepted WELCOME says who owns the node', accepted.claimedBy === 'dustgate-shop');
   check('and carries no refusal', accepted.accepted === undefined);
@@ -228,14 +228,14 @@ const eq = (name, got, want) =>
 // ── boot info: a node says why it last reset (withBootInfo) ──────────────────
 // PAIR: test_nodebus.cpp's "boot info" block — same cases, same order.
 {
-  const w = NL.withBootInfo(NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 2, linear: 0, ct: 1 },
+  const w = NL.withBootInfo(NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 2, bus: 0, ct: 1 },
                                        'dustgate-shop'), 12, 'brownout');
   eq('a WELCOME may carry boot info', NL.validateFrame(w, 's2p'), []);
   check('upS is whole seconds', w.upS === 12);
   check('rst is carried', w.rst === 'brownout');
   check('boot info does not displace the clamp', NL.clampsOn(w) === 1);
 
-  const none = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 2, linear: 0 });
+  const none = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 2, bus: 0 });
   check('absent means unknown — nothing is written', none.upS === undefined && none.rst === undefined);
   eq('and a WELCOME without it still validates', NL.validateFrame(none, 's2p'), []);
 
@@ -249,13 +249,13 @@ const eq = (name, got, want) =>
 
 // ── caps.ct: a clamp is DECLARED by its board, never discovered ────────────
 {
-  const w = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 4, linear: 0, ct: 1 });
+  const w = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 4, bus: 0, ct: 1 });
   eq('a WELCOME may declare a clamp', NL.validateFrame(w, 's2p'), []);
   eq('and clampsOn reads it', NL.clampsOn(w), 1);
 
   // Absent means NONE, which is what every board flashed before this reports by
   // saying nothing. A tray with no clamp rows is then the correct empty state.
-  const legacy = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 4, linear: 0 });
+  const legacy = NL.welcome('node-1', 'xiao_c5', '1.0.0', { servos: 4, bus: 0 });
   eq('a board that says nothing has none', NL.clampsOn(legacy), 0);
   eq('and still validates', NL.validateFrame(legacy, 's2p'), []);
   eq('clampsOn survives a missing WELCOME', NL.clampsOn(null), 0);
@@ -263,10 +263,10 @@ const eq = (name, got, want) =>
   // Bounded by the same cap CONFIG is: a board cannot claim more clamps than it
   // could ever be configured for.
   check('more clamps than MAX_SENSORS_PER_NODE is refused',
-        NL.validateFrame({ ...w, caps: { servos: 0, linear: 0, ct: NL.MAX_SENSORS_PER_NODE + 1 } },
+        NL.validateFrame({ ...w, caps: { servos: 0, bus: 0, ct: NL.MAX_SENSORS_PER_NODE + 1 } },
                          's2p').length === 1);
   check('a non-numeric clamp count is refused',
-        NL.validateFrame({ ...w, caps: { servos: 0, linear: 0, ct: 'yes' } }, 's2p').length === 1);
+        NL.validateFrame({ ...w, caps: { servos: 0, bus: 0, ct: 'yes' } }, 's2p').length === 1);
 }
 
 // ── CONFIG: what a node is WIRED TO, and nothing it could interpret ────────
@@ -460,13 +460,13 @@ const eq = (name, got, want) =>
   const un = NL.sense('saw', false, undefined, undefined, undefined, undefined, true, undefined, true);
   check('an unreachable plug is a fault, still marked a plug', un.fault === true && un.plug === true && !('watts' in un));
   eq('a clamp report is not marked', 'plug' in NL.sense('planer', true, 2.1), false);
-  const wl = NL.welcome('n1', 'xiao_c5', 'x', { servos: 1, linear: 0, plug: 1 });
+  const wl = NL.welcome('n1', 'xiao_c5', 'x', { servos: 1, bus: 0, plug: 1 });
   eq('a WELCOME may say the board polls plugs', NL.validateFrame(wl, 's2p'), []);
   check('and it is read back', NL.pollsPlugs(wl));
   check('absent means no — an old board stays brain-polled',
-        !NL.pollsPlugs(NL.welcome('n1', 'xiao_c5', 'x', { servos: 1, linear: 0 })));
+        !NL.pollsPlugs(NL.welcome('n1', 'xiao_c5', 'x', { servos: 1, bus: 0 })));
   check('a plug cap of 2 is refused',
-        NL.validateFrame(NL.welcome('n1', 'b', 'x', { servos: 1, linear: 0, plug: 2 }), 's2p').length === 1);
+        NL.validateFrame(NL.welcome('n1', 'b', 'x', { servos: 1, bus: 0, plug: 2 }), 's2p').length === 1);
 }
 
 // ── OTA: a node is told to pull an image, and reports how it went ───────────
@@ -512,7 +512,7 @@ const eq = (name, got, want) =>
   check('JOIN is s2p only', NL.S2P.includes('JOIN') && !NL.P2S.includes('JOIN'));
   check('a JOIN with no node id is refused', NL.validateFrame(NL.join(''), 's2p').length === 1);
   check('a JOIN from another protocol version is refused',
-        NL.validateFrame({ t: 'JOIN', v: 2, nodeId: 'x' }, 's2p').length === 1);
+        NL.validateFrame({ t: 'JOIN', v: 99, nodeId: 'x' }, 's2p').length === 1);
 
   eq('REFUSE not-paired validates', NL.validateFrame(NL.refuse('not-paired'), 'p2s'), []);
   eq('REFUSE duplicate validates', NL.validateFrame(NL.refuse('duplicate'), 'p2s'), []);
@@ -530,10 +530,10 @@ const eq = (name, got, want) =>
   check('a port past 65535 is refused', NL.validateFrame(NL.where('dustgate', '192.168.86.46', 65536), 'p2s').length === 1);
   check('a WHERE with no primary is refused', NL.validateFrame(NL.where('', '192.168.86.46', 80), 'p2s').length === 1);
 
-  check('a board that says nothing is not dialling in', NL.dialsIn(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0 })) === false);
-  check('caps.join 1 means it dials in', NL.dialsIn(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, join: 1 })) === true);
-  eq('caps.join 1 validates', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, join: 1 }), 's2p'), []);
-  check('caps.join 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, join: 2 }), 's2p').length === 1);
+  check('a board that says nothing is not dialling in', NL.dialsIn(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0 })) === false);
+  check('caps.join 1 means it dials in', NL.dialsIn(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, join: 1 })) === true);
+  eq('caps.join 1 validates', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, join: 1 }), 's2p'), []);
+  check('caps.join 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, join: 2 }), 's2p').length === 1);
   eq('JOIN did not bump the version', NL.NODELINK_VERSION, 1);
 }
 
@@ -561,14 +561,14 @@ const eq = (name, got, want) =>
   eq('a bin sensor keeps its invert on the wire', NL.config(1, [{ sensorId: 'bin:sys', kind: 'bin', invert: false }]).sensors[0].invert, false);
   eq('a bin sensor is not given a channel', 'channel' in NL.config(1, [{ sensorId: 'bin:sys', kind: 'bin' }]).sensors[0], false);
 
-  const w0 = NL.welcome('n', 'b', 'f', { servos: 2, linear: 0 });
+  const w0 = NL.welcome('n', 'b', 'f', { servos: 2, bus: 0 });
   check('a board that says nothing has no transmitter', NL.pressesRf(w0) === false);
   check('and no bin pad', NL.watchesBin(w0) === false);
-  const w1 = NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, rf: 1, bin: 1 });
+  const w1 = NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, rf: 1, bin: 1 });
   check('caps.rf 1 means a transmitter', NL.pressesRf(w1) === true);
   check('caps.bin 1 means a bin pad', NL.watchesBin(w1) === true);
   eq('both caps validate', NL.validateFrame(w1, 's2p'), []);
-  check('caps.rf 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, linear: 0, rf: 2 }), 's2p').length === 1);
+  check('caps.rf 2 is refused', NL.validateFrame(NL.welcome('n', 'b', 'f', { servos: 2, bus: 0, rf: 2 }), 's2p').length === 1);
   eq('PRESS did not bump the version', NL.NODELINK_VERSION, 1);
 }
 
@@ -576,7 +576,7 @@ const eq = (name, got, want) =>
 // Same cases as the "fail closed" block of test_nodebus.cpp, same order, literals asserted.
 {
   eq('F1 the default delay is 30 s', NL.DEFAULT_FAILSAFE_CLOSE_MS, 30000);
-  eq('F2 the bounds are 10 s to 10 min, four gates', [NL.MIN_FAILSAFE_CLOSE_MS, NL.MAX_FAILSAFE_CLOSE_MS, NL.MAX_FAILSAFE_GATES], [10000, 600000, 4]);
+  eq('F2 the bounds are 10 s to 10 min, six gates', [NL.MIN_FAILSAFE_CLOSE_MS, NL.MAX_FAILSAFE_CLOSE_MS, NL.MAX_FAILSAFE_GATES], [10000, 600000, 6]);
   const fs = { closeAfterMs: 30000, minUs: 400, maxUs: 2600,
                close: [{ drive: 'servo', channel: 0, angle: 100 }, { drive: 'linear', channel: 0, positionMm: 12.5 }] };
   const f = NL.config(5, [], fs);
@@ -589,7 +589,7 @@ const eq = (name, got, want) =>
   check('F6 a delay under 10 s is refused', bad({ closeAfterMs: 9999 }));
   check('F7 a delay over 10 min is refused', bad({ closeAfterMs: 600001 }));
   check('F8 a delay that is not whole ms is refused', bad({ closeAfterMs: 30000.5 }));
-  check('F9 five gates are refused', bad({ close: [0, 1, 2, 3, 4].map((ch) => ({ drive: 'servo', channel: ch, angle: 90 })) }));
+  check('F9 seven gates are refused', bad({ close: [0, 1, 2, 3, 4, 5, 6].map((ch) => ({ drive: 'servo', channel: ch, angle: 90 })) }));
   check('F10 an angle past 180 is refused', bad({ close: [{ drive: 'servo', channel: 0, angle: 181 }] }));
   check('F11 a negative slider position is refused', bad({ close: [{ drive: 'linear', channel: 0, positionMm: -1 }] }));
   check('F12 an unknown drive is refused', bad({ close: [{ drive: 'stepper', channel: 0, angle: 90 }] }));
@@ -616,6 +616,60 @@ const eq = (name, got, want) =>
   // missing before anything is declared.
   eq('stale is 3x the repeat', NL.SENSE_STALE_MS / NL.SENSE_REPEAT_MS, 3);
   eq('protocol version', NL.NODELINK_VERSION, 1);
+}
+
+// ── bus servos (2026-11-01). Same cases as the "bus —" block of test_nodebus.cpp, same order. ──
+{
+  eq('bus — B1 six servos a board, numbers 2..253, 1 is unassigned, max angle 359, report every 10 s',
+     [NL.MAX_BUS_SERVOS_PER_NODE, NL.MIN_BUS_ID, NL.MAX_BUS_ID, NL.BUS_ID_UNASSIGNED, NL.MAX_BUS_ANGLE, NL.BUS_REPORT_MS],
+     [6, 2, 253, 1, 359, 10000]);
+  const valve = { id: 'v1', kind: 'servoGate', servo: { bus: 7, holdAtRest: false } };
+  const f = NL.set(3, valve, 'open', 270, { minUs: 500, maxUs: 2500 });
+  check('bus — B2 a bus valve SET names its servo, not a channel', f.bus === 7 && !('channel' in f));
+  check('bus — B3 and carries no PWM pulse range', !('minUs' in f) && !('maxUs' in f));
+  eq('bus — B4 an angle past 180 is fine on a bus servo', NL.validateFrame(f, 'p2s'), []);
+  check('bus — B5 360 is not', NL.validateFrame({ ...f, angle: 360 }, 'p2s').length === 1);
+  check('bus — B6 channel and bus together are refused', NL.validateFrame({ ...f, channel: 0 }, 'p2s').length === 1);
+  check('bus — B7 servo number 1 is refused on a SET', NL.validateFrame({ ...f, bus: 1 }, 'p2s').length === 1);
+  const slider = { id: 's', kind: 'linear', linear: { bus: 9 } };
+  const fl = NL.set(4, slider, 'p1', 120);
+  check('bus — B8 a slider on a bus board names its servo', fl.bus === 9 && fl.drive === 'linear' && NL.validateFrame(fl, 'p2s').length === 0);
+
+  const w = NL.welcome('dustgate-wall', 'xiao_c5', 'x', { servos: 0, bus: 6 });
+  eq('bus — B9 a bus board says how many it can drive', NL.busServos(w), 6);
+  eq('bus — B10 a PWM board says 0', NL.busServos(NL.welcome('n', 'xiao_c5', 'x', { servos: 2, bus: 0 })), 0);
+  check('bus — B11 seven is refused', NL.validateFrame(NL.welcome('n', 'b', 'x', { servos: 0, bus: 7 }), 's2p').length === 1);
+  eq('bus — B12 a board flashed before bus servos says nothing of them, and has none',
+     [NL.validateFrame(NL.welcome('n', 'b', 'x', { servos: 2, linear: 0 }), 's2p').length, NL.busServos(NL.welcome('n', 'b', 'x', { servos: 2, linear: 0 }))], [0, 0]);
+
+  eq('bus — B13 find validates', NL.validateFrame(NL.servo(5, 'find'), 'p2s'), []);
+  eq('bus — B14 assign to 12 validates', NL.validateFrame(NL.servo(6, 'assign', { to: 12 }), 'p2s'), []);
+  check('bus — B15 assign to 1 is refused', NL.validateFrame(NL.servo(6, 'assign', { to: 1 }), 'p2s').length === 1);
+  check('bus — B16 wiggle needs a number', NL.validateFrame(NL.servo(7, 'wiggle'), 'p2s').length === 1);
+  check('bus — B17 torque needs on', NL.validateFrame(NL.servo(8, 'torque', { bus: 4 }), 'p2s').length === 1);
+  eq('bus — B18 torque off validates', NL.validateFrame(NL.servo(8, 'torque', { bus: 4, on: false }), 'p2s'), []);
+  check('bus — B19 an unknown op is refused', NL.validateFrame(NL.servo(9, 'spin'), 'p2s').length === 1);
+  eq('bus — B20 the ops, in order', NL.SERVO_OPS, ['find', 'assign', 'wiggle', 'torque', 'reset', 'scan']);
+
+  eq('bus — B21 a garbled find reply validates', NL.validateFrame(NL.servoReply(5, true, { found: 'garbled' }), 's2p'), []);
+  eq('bus — B22 a scan reply validates', NL.validateFrame(NL.servoReply(10, true, { ids: [1, 4, 7] }), 's2p'), []);
+  check('bus — B23 a found that is not none|one|garbled is refused',
+        NL.validateFrame(NL.servoReply(5, true, { found: 'two' }), 's2p').length === 1);
+  check('bus — B24 an ok reply carries no err', !('err' in NL.servoReply(5, true, { err: 'x' })));
+
+  const report = NL.bus([{ id: 4, ok: true, deg: 271.5, load: -12, peak: 16, v: 12.1, temp: 31, missed: 0, reads: 120, moves: 3 },
+                         { id: 7, ok: false, missed: 3, reads: 120 }]);
+  eq('bus — B25 a report with one silent servo validates', NL.validateFrame(report, 's2p'), []);
+  check('bus — B26 seven servos in a report are refused',
+        NL.validateFrame(NL.bus(Array.from({ length: 7 }, (_, i) => ({ id: i + 2, ok: true }))), 's2p').length === 1);
+  check('bus — B27 a peak over 100 is refused',
+        NL.validateFrame(NL.bus([{ id: 4, ok: true, peak: 101 }]), 's2p').length === 1);
+
+  eq('bus — B28 a PONG may carry the link', NL.pongWithLink(-61.4, 2), { t: 'PONG', rssi: -61, drops: 2 });
+  eq('bus — B29 and validates', NL.validateFrame(NL.pongWithLink(-61, 2), 's2p'), []);
+  check('bus — B30 an rssi above 0 is refused', NL.validateFrame({ t: 'PONG', rssi: 5 }, 's2p').length === 1);
+  eq('bus — B31 a failsafe may close a bus gate',
+     NL.validateFrame(NL.config(11, [], { closeAfterMs: 30000, close: [{ drive: 'servo', bus: 4, angle: 300 }] }), 'p2s'), []);
 }
 
 // ── report ──────────────────────────────────────────────────────────────────

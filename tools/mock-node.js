@@ -158,7 +158,7 @@ wss.on('connection', (ws) => {
       // power-on — so a primary's link log has the same shape to parse here as
       // it gets from a real node.
       send(ws, NL.withBootInfo(NL.welcome(NODE_ID, BOARD, FW,
-                                          { servos: SERVO_COUNT, linear: 0, ct: MOCK_CT },
+                                          { servos: SERVO_COUNT, bus: 0, ct: MOCK_CT },
                                           owner, accepted),
                                process.uptime(), 'poweron'));
       // Then whether a clamp is in the jack, as a real node does right after an accepted WELCOME.

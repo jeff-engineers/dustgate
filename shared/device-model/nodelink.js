@@ -39,11 +39,15 @@
 
 'use strict';
 
-/** Protocol version. Bump on any incompatible frame change. */
+/** Protocol version. Bump on any incompatible frame change — knowing the cost: a node on another version refuses the
+ *  link, and with it the over-the-WiFi update that would bring it in line, so every board then needs a USB flash.
+ *  Bus servos (2026-11-01) did NOT bump it (jeff): nothing a PWM node sends or receives changed — `caps.bus` reads an old
+ *  node's silence as 0 bus servos, which is true of it, and a PING it already answered — so the brain can still update
+ *  every node over WiFi. Only the slider node's frames changed, and that board is reflashed by USB as the bus board. */
 const NODELINK_VERSION = 1;
 
 /** Frame types, primary → secondary. */
-const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE', 'PRESS', 'ALERT'];
+const P2S = ['HELLO', 'SET', 'CONFIG', 'PING', 'OTA', 'REFUSE', 'WHERE', 'PRESS', 'ALERT', 'SERVO'];
 
 // THE PWM SERVO PULSE RANGE (2026-10-07): what angle 0 and angle 180 map to, shop-wide (the layout's `servo` block, set on
 // the Settings page), carried on every servo SET. The DEFAULT applies when the layout says nothing; the BOUNDS refuse a SET
@@ -67,13 +71,31 @@ function servoRangeOk(minUs, maxUs) {
 const DEFAULT_FAILSAFE_CLOSE_MS = 30000;
 const MIN_FAILSAFE_CLOSE_MS = 10000;
 const MAX_FAILSAFE_CLOSE_MS = 600000;
-const MAX_FAILSAFE_GATES = 4;
+const MAX_FAILSAFE_GATES = 6;   // a bus board's whole chain
+
+// BUS SERVOS (2026-11-01). A bus board drives up to MAX_BUS_SERVOS_PER_NODE serial-bus servos (ST3215 family), each
+// named by its number on the bus. Numbers are shop-wide and the BRAIN hands them out; the node only moves, numbers and
+// reports what it is told to. 1 is every servo's factory number, so a servo answering as 1 is "not yet assigned".
+// PAIR: MAX_BUS_SERVOS_PER_HOST (topology.js) and kMaxBusServos (NodeLink.h); MIN/MAX_BUS_ID and kMin/MaxBusId.
+const MAX_BUS_SERVOS_PER_NODE = 6;
+const BUS_ID_UNASSIGNED = 1;
+const MIN_BUS_ID = 2;
+const MAX_BUS_ID = 253;
+/** A bus servo's angle is its encoder's, one full turn: 0 up to (not including) 360. A PWM servo's is 0..180. */
+const MAX_BUS_ANGLE = 359;
+/** How often a bus board sends BUS unprompted; it also sends one as each move ends. PAIR: kBusReportMs. */
+const BUS_REPORT_MS = 10000;
+/** SERVO operations. PAIR: kServoOps (NodeLink.h), in this order. */
+const SERVO_OPS = ['find', 'assign', 'wiggle', 'torque', 'reset', 'scan'];
+/** What `find` heard on number 1: nothing, one servo, or several at once (their replies collide). */
+const SERVO_FOUND = ['none', 'one', 'garbled'];
+const busIdOk = (n) => Number.isInteger(n) && n >= MIN_BUS_ID && n <= MAX_BUS_ID;
 /** Is this a close delay a node may be given? Whole milliseconds, within the bounds. */
 function failsafeDelayOk(ms) {
   return Number.isInteger(ms) && ms >= MIN_FAILSAFE_CLOSE_MS && ms <= MAX_FAILSAFE_CLOSE_MS;
 }
 /** Frame types, secondary → primary. */
-const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'CLAMP', 'PONG', 'OTASTATE', 'JOIN'];
+const S2P = ['WELCOME', 'ACK', 'STATE', 'SENSE', 'CLAMP', 'PONG', 'OTASTATE', 'JOIN', 'SERVOREPLY', 'BUS'];
 
 // CONFIG and SENSE were added 2026-09-14 WITHOUT bumping NODELINK_VERSION, and
 // that is deliberate rather than an oversight. Both ends ignore a frame type
@@ -229,8 +251,8 @@ const RECONNECT_MAX_MS = 15000;
  * @property {string}  nodeId       who this board actually is
  * @property {string}  board        build target ("devkitc", "qtpy_s3", …)
  * @property {string}  fw           firmware version string
- * @property {{servos:number, linear:number, ct?:number}} caps   what this board HAS:
- *                                  its actuator budget, and how many current
+ * @property {{servos:number, bus:number, ct?:number}} caps   what this board HAS:
+ *                                  its PWM channels, how many bus servos it can drive, and how many current
  *                                  clamps are wired to it. `ct` absent means 0 —
  *                                  every board that answered before 2026-09-15.
  * @property {string} [claimedBy]   the primary this node belongs to
@@ -242,9 +264,10 @@ const RECONNECT_MAX_MS = 15000;
  * @property {number}  seq          monotonic per connection; echoed in ACK
  * @property {string}  selectorId   opaque to the secondary — used only in reports
  * @property {string}  stateId      opaque; carried so STATE reports are meaningful
- * @property {number}  channel      which servo channel (or stepper index)
+ * @property {number} [channel]    a PWM servo: which channel. Exactly one of channel and bus.
+ * @property {number} [bus]         a bus servo or slider: its number (MIN_BUS_ID..MAX_BUS_ID)
  * @property {'servo'|'linear'} drive
- * @property {number} [angle]       drive==='servo': absolute degrees, 0–180
+ * @property {number} [angle]       drive==='servo': absolute degrees, 0–180 (PWM) or 0–MAX_BUS_ANGLE (bus)
  * @property {number} [positionMm]  drive==='linear': absolute mm from the datum
  * @property {boolean}[home]        drive==='linear' only: find the datum AGAIN before this move, even if the node has one.
  *                                  Absent means no. Setting a slider up from the app starts this way (2026-10-07): a datum
@@ -403,19 +426,14 @@ function ota(seq, path, size, md5, fw) {
  */
 function set(seq, sel, stateId, realization, opts = {}) {
   const isServo = sel.kind === 'servoGate' || sel.kind === 'servoManifold';
-  const f = {
-    t: 'SET',
-    seq,
-    selectorId: sel.id,
-    stateId,
-    channel: isServo ? (sel.servo && sel.servo.channel) || 0
-                     : (sel.linear && sel.linear.channel) || 0,
-    drive: isServo ? 'servo' : 'linear',
-  };
+  const block = (isServo ? sel.servo : sel.linear) || {};
+  const f = { t: 'SET', seq, selectorId: sel.id, stateId };
+  if (block.bus !== undefined) f.bus = block.bus; else f.channel = block.channel || 0;
+  f.drive = isServo ? 'servo' : 'linear';
   if (isServo) {
     f.angle = realization;
     f.holdAtRest = !!(sel.servo && sel.servo.holdAtRest);
-    if (opts.minUs !== undefined && opts.maxUs !== undefined) { f.minUs = opts.minUs; f.maxUs = opts.maxUs; }
+    if (f.channel !== undefined && opts.minUs !== undefined && opts.maxUs !== undefined) { f.minUs = opts.minUs; f.maxUs = opts.maxUs; }
   } else {
     f.positionMm = realization;
     if (opts.home) f.home = true;
@@ -486,9 +504,11 @@ function config(seq, sensors, failsafe) {
   // FAIL CLOSED (D-85): the delay and each gate's resolved close command. Omitted when the brain has none to give (a board
   // that drives no gate), which a node reads as "nothing to close".
   if (failsafe) {
+    // A gate is named as on a SET: a PWM channel, or a bus servo's number.
+    const at = (c) => (c.bus !== undefined ? { bus: c.bus } : { channel: c.channel });
     const fs = { closeAfterMs: failsafe.closeAfterMs, close: (failsafe.close || []).map((c) => (c.drive === 'linear'
-      ? { drive: 'linear', channel: c.channel, positionMm: c.positionMm }
-      : { drive: 'servo', channel: c.channel, angle: c.angle, holdAtRest: !!c.holdAtRest })) };
+      ? { drive: 'linear', ...at(c), positionMm: c.positionMm }
+      : { drive: 'servo', ...at(c), angle: c.angle, holdAtRest: !!c.holdAtRest })) };
     if (typeof failsafe.minUs === 'number' && typeof failsafe.maxUs === 'number') { fs.minUs = failsafe.minUs; fs.maxUs = failsafe.maxUs; }
     // The collector's board only: press the remote OFF when the clamp says the blower runs (D-85 piece 4). The press is
     // resolved like a PRESS frame; `sensorId` is the clamp it judges by, opaque like every sensorId.
@@ -511,7 +531,7 @@ function config(seq, sensors, failsafe) {
  *   look identical to a node that is simply offline.
  */
 /**
- * @param {{servos:number, linear:number, ct?:number}} caps
+ * @param {{servos:number, bus:number, ct?:number}} caps
  *
  * `caps.ct` is the one field here that is not about moving something, and it is
  * the reason a clamp can appear in the UI at all. A plug is DISCOVERED — a
@@ -565,6 +585,9 @@ const welcomeAccepted = (f) => !!f && f.accepted !== false;
 /** How many clamps a board says it has. Absent means none, which is what every
  *  board flashed before 2026-09-15 reports by saying nothing. */
 const clampsOn = (w) => (w && w.caps && typeof w.caps.ct === 'number') ? w.caps.ct : 0;
+
+/** How many bus servos a board says it can drive. 0 = a PWM board. */
+const busServos = (w) => (w && w.caps && Number.isInteger(w.caps.bus)) ? w.caps.bus : 0;
 
 /** Can this board poll plugs for the primary? Absent means NO — every board
  *  flashed before 2026-10-03 stays brain-polled rather than being handed a CONFIG
@@ -709,6 +732,71 @@ function pong() {
 }
 
 /**
+ * SERVO — the brain asks a bus board to do something to its servos other than move one to a state (2026-11-01). P→S,
+ * answered by a SERVOREPLY with the same seq.
+ *
+ *   find            ask who answers as BUS_ID_UNASSIGNED (a servo straight from the factory) and, if exactly one does,
+ *                   turn it a little so a person can see which; the reply's `found` says none, one, or garbled (two or
+ *                   more answered at once and their replies collided)
+ *   assign {to}     give the one unassigned servo the number `to` (saved in the servo), and check it answers as `to`
+ *   wiggle {bus}    turn that servo a little and back, so a person can find it
+ *   torque {bus,on} hold (on) or relax (off) that servo; relaxed, it can be turned by hand
+ *   reset  {bus}    give that servo back the number BUS_ID_UNASSIGNED
+ *   scan            list every number that answers, in the reply's `ids`
+ *
+ * The numbers come from the brain, which owns them (they are shop-wide, tied to gates in the layout); a node interprets
+ * nothing, it only does what it is told on its own bus. A board does one thing at a time: a SERVO that arrives during a
+ * move waits for it, exactly as a second SET does.
+ */
+function servo(seq, op, args = {}) {
+  const f = { t: 'SERVO', seq, op };
+  for (const k of ['bus', 'to', 'on']) if (args[k] !== undefined) f[k] = args[k];
+  return f;
+}
+/** SERVOREPLY — S→P, the outcome of a SERVO. `err` is a sentence for a person when ok is false. */
+function servoReply(seq, ok, extra = {}) {
+  const f = { t: 'SERVOREPLY', seq, ok };
+  if (!ok && extra.err) f.err = String(extra.err).slice(0, MAX_STATE_ERR_LEN);
+  if (extra.found !== undefined) f.found = extra.found;
+  if (extra.ids !== undefined) f.ids = extra.ids;
+  return f;
+}
+/**
+ * BUS — a bus board's account of its servos (2026-11-01). S→P, every BUS_REPORT_MS and as each move ends.
+ *
+ * One entry per servo the board has been told about (the numbers in its SETs and its failsafe), whether or not it
+ * answered. All of it is the servo's own reading, reported as read: the node judges nothing. `peak` is the highest load
+ * during the servo's last move — the number the app plots and the brain logs to learn what "usual" is. Load is the
+ * servo's drive duty in percent, which at a slow, steady speed tracks how hard the gate is to turn.
+ *
+ *   id      its number
+ *   ok      it answered this report's reads; false = it did not (and the rest are absent)
+ *   deg     where it is, 0..MAX_BUS_ANGLE
+ *   load    load now, percent of full drive (signed: which way it is pushing)
+ *   peak    the highest |load| during its last move, percent
+ *   v       supply at the servo, volts
+ *   temp    its temperature, °C
+ *   missed  reads of it that failed since the board started
+ *   reads   reads of it attempted since the board started
+ *   moves   moves it has finished since the board started — the brain adds `peak` to the servo's history when this
+ *           goes up, so a report repeated every BUS_REPORT_MS never counts one move twice
+ */
+function bus(servos) {
+  return { t: 'BUS', servos };
+}
+/**
+ * A PONG may carry the board's own account of its link (2026-11-01): `rssi` (dBm, now) and `drops` (times it lost the
+ * brain since it started). Developer mode shows them beside the brain's own count of PONGs that never came. Optional:
+ * a board that cannot read its radio says nothing.
+ */
+function pongWithLink(rssi, drops) {
+  const f = { t: 'PONG' };
+  if (typeof rssi === 'number') f.rssi = Math.round(rssi);
+  if (typeof drops === 'number') f.drops = Math.max(0, Math.floor(drops));
+  return f;
+}
+
+/**
  * Validate a decoded frame. Returns an array of problem strings (empty = valid).
  * Both ends validate: a secondary must never act on a malformed SET, and a
  * primary must never trust a WELCOME that claims a different protocol version.
@@ -743,8 +831,11 @@ function validateFrame(f, direction) {
     case 'WELCOME':
       if (f.v !== NODELINK_VERSION) errs.push(`WELCOME.v ${f.v} != ${NODELINK_VERSION}`);
       str('nodeId'); str('board');
-      if (!f.caps || typeof f.caps.servos !== 'number' || typeof f.caps.linear !== 'number') {
-        errs.push('WELCOME.caps must be {servos:number, linear:number}');
+      // `bus` absent means 0 — every board flashed before bus servos (2026-11-01) says nothing about them, and is right.
+      if (!f.caps || typeof f.caps.servos !== 'number') {
+        errs.push('WELCOME.caps must be {servos:number, bus?:number}');
+      } else if (f.caps.bus !== undefined && (!Number.isInteger(f.caps.bus) || f.caps.bus < 0 || f.caps.bus > MAX_BUS_SERVOS_PER_NODE)) {
+        errs.push(`WELCOME.caps.bus must be a whole number 0..${MAX_BUS_SERVOS_PER_NODE}`);
       }
       // OPTIONAL, and absent means none — a board flashed before clamps existed
       // answers exactly as it always did rather than being refused.
@@ -806,10 +897,14 @@ function validateFrame(f, direction) {
       num('seq', 0, Number.MAX_SAFE_INTEGER);
       str('selectorId'); str('stateId');
       if (f.drive !== 'servo' && f.drive !== 'linear') errs.push('SET.drive must be servo|linear');
-      num('channel', 0, 15);
+      // A PWM channel or a bus servo's number: exactly one.
+      if (('channel' in f) === ('bus' in f)) errs.push('SET needs exactly one of channel and bus');
+      else if ('channel' in f) num('channel', 0, 15);
+      else if (!busIdOk(f.bus)) errs.push(`SET.bus must be a servo number ${MIN_BUS_ID}..${MAX_BUS_ID}`);
       // A SET with no realization is the failure this protocol exists to
       // prevent: it would leave the secondary guessing where to point a valve.
-      if (f.drive === 'servo') num('angle', 0, 180);
+      if (f.drive === 'servo') num('angle', 0, 'bus' in f ? MAX_BUS_ANGLE : 180);
+      if ('bus' in f && ('minUs' in f || 'maxUs' in f)) errs.push('SET.minUs/maxUs are for a PWM servo');
       if (f.drive === 'linear') num('positionMm', -10000, 10000);
       if ('home' in f && typeof f.home !== 'boolean') errs.push('SET.home must be true|false');
       if (f.home === true && f.drive !== 'linear') errs.push('SET.home is for a linear drive');
@@ -833,9 +928,12 @@ function validateFrame(f, direction) {
           else fs.close.forEach((c, i) => {
             const at = `CONFIG.failsafe.close[${i}]`;
             if (!c || typeof c !== 'object') { errs.push(`${at} must be an object`); return; }
-            if (!Number.isInteger(c.channel) || c.channel < 0 || c.channel > 15) errs.push(`${at}.channel out of range (0..15)`);
+            if (('channel' in c) === ('bus' in c)) errs.push(`${at} needs exactly one of channel and bus`);
+            else if ('channel' in c && (!Number.isInteger(c.channel) || c.channel < 0 || c.channel > 15)) errs.push(`${at}.channel out of range (0..15)`);
+            else if ('bus' in c && !busIdOk(c.bus)) errs.push(`${at}.bus out of range (${MIN_BUS_ID}..${MAX_BUS_ID})`);
+            const maxAngle = 'bus' in c ? MAX_BUS_ANGLE : 180;
             if (c.drive === 'servo') {
-              if (!Number.isInteger(c.angle) || c.angle < 0 || c.angle > 180) errs.push(`${at}.angle out of range (0..180)`);
+              if (!Number.isInteger(c.angle) || c.angle < 0 || c.angle > maxAngle) errs.push(`${at}.angle out of range (0..${maxAngle})`);
               if (c.holdAtRest !== undefined && typeof c.holdAtRest !== 'boolean') errs.push(`${at}.holdAtRest must be a boolean`);
             } else if (c.drive === 'linear') {
               if (typeof c.positionMm !== 'number' || Number.isNaN(c.positionMm) || c.positionMm < 0) errs.push(`${at}.positionMm must be a number, 0 or more`);
@@ -985,8 +1083,38 @@ function validateFrame(f, direction) {
       if (f.pct !== undefined) num('pct', 0, 100);
       if (f.err !== undefined && typeof f.err !== 'string') errs.push('OTASTATE.err must be a string');
       break;
+    case 'SERVO':
+      num('seq', 0, Number.MAX_SAFE_INTEGER);
+      if (!SERVO_OPS.includes(f.op)) { errs.push(`SERVO.op must be one of ${SERVO_OPS.join('|')}`); break; }
+      if (['wiggle', 'torque', 'reset'].includes(f.op) && !busIdOk(f.bus)) errs.push(`SERVO.bus must be a servo number ${MIN_BUS_ID}..${MAX_BUS_ID}`);
+      if (f.op === 'assign' && !busIdOk(f.to)) errs.push(`SERVO.to must be a servo number ${MIN_BUS_ID}..${MAX_BUS_ID}`);
+      if (f.op === 'torque' && typeof f.on !== 'boolean') errs.push('SERVO.on must be a boolean');
+      break;
+    case 'SERVOREPLY':
+      num('seq', 0, Number.MAX_SAFE_INTEGER);
+      if (typeof f.ok !== 'boolean') errs.push('SERVOREPLY.ok must be a boolean');
+      if (f.err !== undefined && (typeof f.err !== 'string' || !f.err || f.err.length > MAX_STATE_ERR_LEN)) errs.push(`SERVOREPLY.err must be a string of 1-${MAX_STATE_ERR_LEN} chars`);
+      if (f.found !== undefined && !SERVO_FOUND.includes(f.found)) errs.push(`SERVOREPLY.found must be one of ${SERVO_FOUND.join('|')}`);
+      if (f.ids !== undefined && (!Array.isArray(f.ids) || f.ids.length > 254 || !f.ids.every((n) => Number.isInteger(n) && n >= 0 && n <= 253)))
+        errs.push('SERVOREPLY.ids must be a list of servo numbers');
+      break;
+    case 'BUS':
+      if (!Array.isArray(f.servos) || f.servos.length > MAX_BUS_SERVOS_PER_NODE) { errs.push(`BUS.servos must be a list of at most ${MAX_BUS_SERVOS_PER_NODE}`); break; }
+      f.servos.forEach((sv, i) => {
+        const at = `BUS.servos[${i}]`;
+        if (!sv || typeof sv !== 'object') { errs.push(`${at} must be an object`); return; }
+        if (!busIdOk(sv.id)) errs.push(`${at}.id must be a servo number ${MIN_BUS_ID}..${MAX_BUS_ID}`);
+        if (typeof sv.ok !== 'boolean') errs.push(`${at}.ok must be a boolean`);
+        const n = (k, lo, hi) => { if (sv[k] !== undefined && (typeof sv[k] !== 'number' || Number.isNaN(sv[k]) || sv[k] < lo || sv[k] > hi)) errs.push(`${at}.${k} out of range (${lo}..${hi})`); };
+        n('deg', 0, MAX_BUS_ANGLE + 1); n('load', -100, 100); n('peak', 0, 100); n('v', 0, 30); n('temp', -40, 150);
+        n('missed', 0, Number.MAX_SAFE_INTEGER); n('reads', 0, Number.MAX_SAFE_INTEGER); n('moves', 0, Number.MAX_SAFE_INTEGER);
+      });
+      break;
     case 'PING':
+      break;
     case 'PONG':
+      if (f.rssi !== undefined) num('rssi', -127, 0);
+      if (f.drops !== undefined) num('drops', 0, Number.MAX_SAFE_INTEGER);
       break;
   }
   return errs;
@@ -1002,6 +1130,8 @@ module.exports = {
   MAX_RST_LEN, MAX_STATE_ERR_LEN, MAX_OTA_PATH, MIN_OTA_BYTES, MAX_OTA_BYTES, OTA_STATES,
   MAX_WHERE_IP_LEN, BEACON_PORT, REFUSE_REASONS, dialsIn, join, refuse, where,
   MIN_RF_TICK_US, MAX_RF_TICK_US, MAX_RF_REPEATS, pressesRf, watchesBin, press,
+  MAX_BUS_SERVOS_PER_NODE, BUS_ID_UNASSIGNED, MIN_BUS_ID, MAX_BUS_ID, MAX_BUS_ANGLE, BUS_REPORT_MS, SERVO_OPS, SERVO_FOUND,
+  busIdOk, busServos, servo, servoReply, bus, pongWithLink,
   hello, welcome, withBootInfo, set, config, ack, state, sense, clamp, alert, ping, pong, ota, otaState, welcomeAccepted, clampsOn,
   validateFrame,
 };

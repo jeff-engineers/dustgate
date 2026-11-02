@@ -81,7 +81,7 @@
 // suction it is not accounting for. No re-homing on reconnect: the brain sends each gate where it belongs.
 //
 // Build:  pio run -e xiao_c5           (PWM servo bank)
-//         pio run -e xiao_c5_linear    (ST3215 slider)
+//         pio run -e xiao_c5_bus    (ST3215 slider)
 // =============================================================================
 
 #include <Arduino.h>
@@ -131,6 +131,7 @@
 
 #if HAS_LINEAR
   #include "../motor/st3215/ST3215LinearDriver.h"
+  #include "../motor/st3215/BusBank.h"
   #include "../feedback/LimitSwitchDistance.h"
   #include "../utils/MotionMath.h"
 #endif
@@ -185,6 +186,73 @@ static const int SERVO_PINS[SERVO_COUNT] = {
 #if HAS_LINEAR
 static ST3215LinearDriver  motor;
 static LimitSwitchDistance feedback;
+
+// ── The bus board's valves and manifolds (2026-11-01) ───────────────────────
+//
+// They share the slider's bus (motor.bus()) and are moved by busbank::Bank, one at a time — the slider included: the
+// loop runs a valve move only while the slider is still, and a slider move only while no valve moves. Numbers come from
+// the brain (SET.bus); this board keeps none.
+struct NodeBusPort : busbank::Port {
+    ST3215Bus& b() { return motor.bus(); }
+    Heard ping(uint8_t id) override {
+        uint8_t err = 0;
+        if (b().ping(id, &err)) return Heard::One;
+        // Silence is "no reply"; anything else is bytes that did not make a frame — two servos answering at once.
+        return std::strcmp(b().lastError(), "no reply") == 0 ? Heard::None : Heard::Garbled;
+    }
+    bool read(uint8_t id, busbank::Reading& r) override {
+        uint8_t raw[11];   // registers 56..66: position, speed, load, voltage, temperature, …, moving
+        if (!b().readRegs(id, ST_REG_PRESENT_POS, sizeof(raw), raw)) return false;
+        r.pos = (uint16_t)(raw[0] | (raw[1] << 8)) & 0x0FFF;
+        const uint16_t ld = (uint16_t)(raw[4] | (raw[5] << 8));
+        const int mag = (ld & 0x3FF) / 10;                         // 0..1000 → percent of full drive
+        r.load   = (ld & 0x400) ? -mag : mag;                      // bit 10 is the direction
+        r.v      = raw[6] / 10.0f;
+        r.temp   = raw[7];
+        r.moving = raw[10] != 0;
+        return true;
+    }
+    bool moveTo(uint8_t id, uint16_t pos, uint16_t speed) override { return b().moveTo(id, pos, speed); }
+    bool torque(uint8_t id, bool on) override { return b().write8(id, ST_REG_TORQUE_ENABLE, on ? 1 : 0); }
+    bool positionMode(uint8_t id) override {
+        // Read first and write only what differs: an EEPROM cell has a finite number of writes, and most servos are
+        // already in mode 0 with a whole-turn range from the factory.
+        uint8_t mode = 0xFF; uint16_t lo = 1, hi = 0;
+        if (!b().read8(id, ST_REG_MODE, &mode) || !b().read16(id, ST_REG_MIN_ANGLE, &lo) || !b().read16(id, ST_REG_MAX_ANGLE, &hi)) return false;
+        if (mode != 0 && !b().writeEeprom8(id, ST_REG_MODE, 0)) return false;
+        if (lo != 0 && !b().writeEeprom16(id, ST_REG_MIN_ANGLE, 0)) return false;
+        if (hi != ST_POS_MAX && !b().writeEeprom16(id, ST_REG_MAX_ANGLE, ST_POS_MAX)) return false;
+        if (mode != 0 || lo != 0 || hi != ST_POS_MAX) Serial.printf("[BUS] servo %u set to position mode\n", id);
+        return true;
+    }
+    bool renumber(uint8_t from, uint8_t to) override {
+        // By hand, not writeEeprom8(): that re-locks and reads back at the OLD number, which stops answering the moment
+        // the write lands. Unlock at the old number, write, then lock at the new one.
+        if (!b().eepromUnlocked(from, true)) return false;
+        delay(5);
+        const bool wrote = b().write8(from, ST_REG_ID, to);
+        delay(30);
+        if (!wrote) { b().eepromUnlocked(from, false); return false; }
+        b().write8(to, ST_REG_LOCK, 1);
+        delay(5);
+        uint8_t err = 0;
+        return b().ping(to, &err);
+    }
+    void pause(uint32_t ms) override {
+        const uint32_t until = millis() + ms;
+        while ((int32_t)(millis() - until) < 0) { watchdog::pet(); delay(10); }
+    }
+};
+static NodeBusPort   g_busPort;
+static busbank::Bank g_bank(g_busPort);
+// Bus-servo SETs, from the socket task to loop(): one slot per servo, so a SET for one servo never displaces another's.
+struct BusSlot { bool full = false; topo::nodelink::SetCommand cmd; };
+static BusSlot g_busSlots[topo::nodelink::kMaxBusServos];
+// A SERVO order waits here for the bank to be idle; its reply is sent from loop().
+static volatile bool              g_servoPending = false;
+static topo::nodelink::ServoOrder g_servoOrder;
+static uint32_t                   g_lastBusReportMs = 0;
+static bool                       g_busReportDue = false;
 
 // ── The globals the shared linear headers expect ────────────────────────────
 //
@@ -358,6 +426,7 @@ static String g_owner;              // "" = unclaimed
 // not merely having a connection open.
 static volatile uint32_t g_ownerClientId = 0;
 static volatile bool     g_ownerLinked   = false;
+static volatile uint32_t g_linkDrops     = 0;      // times the owner's link went down since boot, for developer mode
 // Did the owner reach us over a socket WE dialled (brainlink) or one it dialled
 // (nodeWs)? Decides where unsolicited frames go, and which side keeps a link up.
 static volatile bool     g_ownerOutbound = false;
@@ -502,7 +571,7 @@ static void retryDriveIfNeeded() {
     //
     // A failed home is now terminal until someone asks again, which is what the
     // fault message always claimed. The asking is the button hold in setup().
-    if (motor.online()) return;
+    if (motor.online() || !motor.id()) return;
 
     uint32_t now = millis();
     if (now - g_lastDriveRetryMs < kDriveRetryMs) return;
@@ -1051,7 +1120,7 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
         topo::nodelink::buildWelcome(reply.to<JsonObject>(), host.c_str(),
                                      BOARD_NAME, buildstamp::fw(),   // the Boards page shows it
                                      HAS_SERVO ? SERVO_COUNT : 0,
-                                     HAS_LINEAR ? 1 : 0,
+                                     HAS_LINEAR ? topo::nodelink::kMaxBusServos : 0,   // a bus board's servos
                                      g_owner.c_str(), accepted,
 #ifdef PIN_CT
                                      1,
@@ -1071,7 +1140,28 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
         if (accepted) g_clampResend = true;
 #endif
     } else if (strcmp(t, "PING") == 0) {
-        topo::nodelink::buildPong(reply.to<JsonObject>());
+        topo::nodelink::buildPong(reply.to<JsonObject>(), WiFi.RSSI(), g_linkDrops);
+    } else if (strcmp(t, "SERVO") == 0) {
+        // OWNER ONLY, like SET: renumbering a servo is changing the hardware.
+        topo::nodelink::ServoOrder order;
+        const char* err = nullptr;
+        if (!g_ownerLinked || conn.id != g_ownerClientId) {
+            topo::nodelink::buildServoReply(reply.to<JsonObject>(), f["seq"] | 0, false, "not the owner of this node");
+        } else if (!topo::nodelink::parseServoFrame(f, order, err)) {
+            Serial.print(F("[SERVO] MALFORMED — ")); Serial.println(err ? err : "?");
+            topo::nodelink::buildServoReply(reply.to<JsonObject>(), order.seq, false, err);
+#if HAS_LINEAR
+        } else if (g_servoPending) {
+            topo::nodelink::buildServoReply(reply.to<JsonObject>(), order.seq, false, "the board is busy with the last one - try again");
+        } else {
+            g_servoOrder = order;
+            g_servoPending = true;   // done from loop() once nothing moves; the reply is sent then
+            return;
+#else
+        } else {
+            topo::nodelink::buildServoReply(reply.to<JsonObject>(), order.seq, false, "this board has no servo bus");
+#endif
+        }
     } else if (strcmp(t, "CONFIG") == 0) {
         // SAME GATE AS SET. An accepted WELCOME is what earns the right to
         // configure, not merely holding a socket — a board anyone could
@@ -1188,29 +1278,48 @@ static void handleNodeFrame(const Conn& conn, const uint8_t* data, size_t len) {
         } else if (!topo::nodelink::parseSetFrame(f, cmd, err)) {
             Serial.print(F("[SET] MALFORMED — ")); Serial.println(err ? err : "?");
             topo::nodelink::buildAck(reply.to<JsonObject>(), f["seq"] | 0, false, err);
-        } else if (cmd.isServo && !HAS_SERVO) {
+        } else if (cmd.bus && !HAS_LINEAR) {
+            Serial.println(F("[SET] REFUSED — a bus servo, but this node drives PWM servos."));
+            topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, false, "this board has no servo bus");
+        } else if (cmd.isServo && !cmd.bus && !HAS_SERVO) {
             // Refusing is the honest answer — the primary marks the gate
             // un-driveable rather than believing it moved.
-            Serial.println(F("[SET] REFUSED — servo move, but this node drives a slider."));
+            Serial.println(F("[SET] REFUSED — a PWM servo move, but this is a bus board."));
             topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, false,
-                                     "no servo bank on this node");
+                                     "no PWM servos on this board");
         } else if (!cmd.isServo && !HAS_LINEAR) {
             Serial.println(F("[SET] REFUSED — linear move, but this node drives PWM servos."));
             topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, false,
                                      "no linear actuator on this node");
-        } else if (cmd.isServo && (cmd.channel < 0 || cmd.channel >= SERVO_COUNT)) {
+        } else if (cmd.isServo && !cmd.bus && (cmd.channel < 0 || cmd.channel >= SERVO_COUNT)) {
             Serial.print(F("[SET] REFUSED — channel ")); Serial.print(cmd.channel);
             Serial.print(F(" out of range (this board has ")); Serial.print(SERVO_COUNT);
             Serial.println(F(")"));
             topo::nodelink::buildAck(reply.to<JsonObject>(), cmd.seq, false, "no such channel");
         } else {
             portENTER_CRITICAL(&cmdMux);
+#if HAS_LINEAR
+            if (cmd.isServo && cmd.bus) {
+                // Its own slot, keyed by servo: the bank queues them and runs one at a time.
+                size_t at = topo::nodelink::kMaxBusServos;
+                for (size_t i = 0; i < (size_t)topo::nodelink::kMaxBusServos; i++)
+                    if (g_busSlots[i].full && g_busSlots[i].cmd.bus == cmd.bus) { at = i; break; }
+                for (size_t i = 0; at == (size_t)topo::nodelink::kMaxBusServos && i < (size_t)topo::nodelink::kMaxBusServos; i++)
+                    if (!g_busSlots[i].full) at = i;
+                if (at < (size_t)topo::nodelink::kMaxBusServos) { g_busSlots[at].cmd = cmd; g_busSlots[at].full = true; }
+            } else
+#endif
+            {
             cmdSlot    = cmd;
             cmdPending = true;
+            }
             portEXIT_CRITICAL(&cmdMux);
             // The line the bring-up actually needs: what arrived, and where it
             // is going to land.
-            if (cmd.isServo) {
+            if (cmd.isServo && cmd.bus) {
+                Serial.print(F("[SET] Bus servo ")); Serial.print(cmd.bus);
+                Serial.print(F(": ")); Serial.print(cmd.angle); Serial.print(F("deg  ("));
+            } else if (cmd.isServo) {
                 Serial.print(F("[SET] Servo")); Serial.print(cmd.channel + 1);
                 Serial.print(F(": ")); Serial.print(cmd.angle); Serial.print(F("deg"));
 #if HAS_SERVO
@@ -1363,7 +1472,7 @@ static void onNodeWsEvent(AsyncWebSocket*, AsyncWebSocketClient* client,
         // The OWNER's socket closing means "no owner is connected", not "the
         // node is unowned" — the claim itself survives, so a rebooting primary
         // gets its node back rather than losing it to whoever dials in first.
-        if (client->id() == g_ownerClientId) g_ownerLinked = false;
+        if (client->id() == g_ownerClientId) { if (g_ownerLinked) g_linkDrops = g_linkDrops + 1; g_ownerLinked = false; }
         return;
     }
     if (type != WS_EVT_DATA) return;
@@ -1505,7 +1614,7 @@ static void onBrainFrame(const uint8_t* d, size_t n) {
 }
 static void onBrainState(bool up) {
     if (up) return;                      // the HELLO that follows decides "linked"
-    if (g_ownerOutbound) g_ownerLinked = false;
+    if (g_ownerOutbound) { if (g_ownerLinked) g_linkDrops = g_linkDrops + 1; g_ownerLinked = false; }
     if (g_linkedClientId == kOutboundId) g_primaryLinked = false;
     Serial.println(F("[NODE] Primary disconnected (our socket) — holding the gates; they close if the brain stays away."));
 }
@@ -1598,14 +1707,10 @@ void setup() {
     // Order matters: the endstops have to be readable before the sweep can look
     // at them, and the servo has to be in stepping mode with torque on before it
     // will move at all.
-    if (!motor.begin()) {
-        // A slider node with no servo on the bus is a node that can do nothing,
-        // and it must not pretend otherwise — a WELCOME advertising linear:1 on
-        // a board that cannot move would have the primary route tools to a gate
-        // that never opens. It stays up so the screen and the log can say why.
-        Serial.println(F("[NODE] ⚠ no ST3215 on the bus — this node cannot drive its gate."));
-        g_homing = HOME_FAILED;
-    }
+    // The bus opens now; the slider's servo is set up when its first SET says which number it is (it has none until a
+    // person adds it), and the valves are each put in position mode on their first move. Nothing to say yet if no
+    // servo answers: a bus board with nothing added is a new board, not a broken one.
+    if (!motor.openBus()) Serial.println(F("[NODE] ⚠ the servo bus would not open — check PIN_SERVO_BUS_* in the board header."));
     feedback.begin(&motor);
     bootTrace("slider");
 #endif
@@ -1860,7 +1965,12 @@ static void tickFailsafe() {
         }
 #endif
 #if HAS_LINEAR
+        if (g.isServo && g.bus) {
+            g_bank.want((uint8_t)g.bus, g.angle, "failsafe", "closed");
+            Serial.printf("[FAILSAFE] bus servo %d -> %ddeg (closed)\n", g.bus, g.angle);
+        }
         if (!g.isServo) {
+            if (g.bus) motor.setId((uint8_t)g.bus);
             // Only from a datum: a rack that does not know where it is must not drive itself anywhere, least of all
             // with nobody watching. Left where it is, and said.
             g_deferredMove = false;
@@ -1875,7 +1985,125 @@ static void tickFailsafe() {
     }
 }
 
+#if HAS_LINEAR
+// The bank's half of loop(): bus-servo SETs in, finished moves out as STATE, SERVO orders once nothing moves, and the BUS
+// report every kBusReportMs and after each move. Nothing here blocks except a SERVO order's wiggle or scan, which pet the
+// watchdog while they wait.
+static void sendBusReport() {
+    topo::nodelink::BusServoReport r[topo::nodelink::kMaxBusServos];
+    const size_t n = g_bank.report(r);
+    g_lastBusReportMs = millis();
+    g_busReportDue = false;
+    if (!n) return;
+    StaticJsonDocument<1536> doc;
+    topo::nodelink::buildBus(doc.to<JsonObject>(), r, n);
+    String out; serializeJson(doc, out);
+    sendToOwner(out);
+}
+static void runServoOrder() {
+    using topo::nodelink::kServoOps;
+    const topo::nodelink::ServoOrder o = g_servoOrder;
+    DynamicJsonDocument doc(1024);
+    const char* op = kServoOps[o.op];
+    Serial.printf("[SERVO] %s", op);
+    if (o.bus) Serial.printf(" servo %d", o.bus);
+    if (o.to) Serial.printf(" -> %d", o.to);
+    Serial.println();
+    switch (o.op) {
+    case 0: {   // find
+        const busbank::Port::Heard h = g_bank.findNew();
+        const char* found = h == busbank::Port::Heard::One ? "one" : h == busbank::Port::Heard::Garbled ? "garbled" : "none";
+        Serial.printf("[SERVO] new servos answering: %s\n", found);
+        topo::nodelink::buildServoReply(doc.to<JsonObject>(), o.seq, true, nullptr, found);
+        break;
+    }
+    case 1: {   // assign
+        const char* err = nullptr;
+        const bool ok = g_bank.assign((uint8_t)o.to, err);
+        Serial.printf("[SERVO] %s\n", ok ? "numbered" : err);
+        topo::nodelink::buildServoReply(doc.to<JsonObject>(), o.seq, ok, err);
+        break;
+    }
+    case 2: {   // wiggle
+        const bool ok = g_bank.wiggle((uint8_t)o.bus);
+        topo::nodelink::buildServoReply(doc.to<JsonObject>(), o.seq, ok, ok ? nullptr : "that servo is not answering");
+        break;
+    }
+    case 3: {   // torque
+        const bool ok = g_bank.torque((uint8_t)o.bus, o.on);
+        topo::nodelink::buildServoReply(doc.to<JsonObject>(), o.seq, ok, ok ? nullptr : "that servo is not answering");
+        break;
+    }
+    case 4: {   // reset
+        const bool ok = g_bank.reset((uint8_t)o.bus);
+        if (ok && o.bus == motor.id()) motor.setId(0);
+        topo::nodelink::buildServoReply(doc.to<JsonObject>(), o.seq, ok, ok ? nullptr : "that servo is not answering");
+        break;
+    }
+    case 5: {   // scan
+        uint8_t ids[64];
+        const size_t n = g_bank.scan(ids, sizeof(ids));
+        JsonArray a = topo::nodelink::buildServoReply(doc.to<JsonObject>(), o.seq, true, nullptr, nullptr, true);
+        for (size_t i = 0; i < n; i++) a.add(ids[i]);
+        Serial.printf("[SERVO] %u answer\n", (unsigned)n);
+        break;
+    }
+    }
+    String out; serializeJson(doc, out);
+    sendToOwner(out);
+    g_busReportDue = true;
+}
+static void tickBusBank() {
+    // In from the socket task.
+    portENTER_CRITICAL(&cmdMux);
+    topo::nodelink::SetCommand in[topo::nodelink::kMaxBusServos];
+    size_t nIn = 0;
+    for (BusSlot& sl : g_busSlots) if (sl.full) { in[nIn++] = sl.cmd; sl.full = false; }
+    portEXIT_CRITICAL(&cmdMux);
+    for (size_t i = 0; i < nIn; i++) {
+        if (!g_bank.want((uint8_t)in[i].bus, in[i].angle, in[i].selectorId, in[i].stateId)) {
+            reportState(in[i].selectorId, in[i].stateId, false, "this board already drives six servos");
+            continue;
+        }
+        reportState(in[i].selectorId, in[i].stateId, true, nullptr);
+        statusled::flashActivity();
+        g_lastCmdMs = millis();
+        statusscreen::note();
+    }
+    // The failsafe names this board's gates even before any has moved: report on them from the start.
+    const topo::nodelink::FailsafePlan& fp = g_failsafe.plan();
+    for (size_t i = 0; i < fp.n; i++) if (fp.close[i].bus && fp.close[i].isServo) g_bank.note((uint8_t)fp.close[i].bus);
+
+    // One move at a time: a valve waits while the slider moves or homes.
+    const bool sliderBusy = actuatorMoving() || g_homing == HOME_RUNNING;
+    if (!sliderBusy || g_bank.moving()) {
+        const busbank::Ended e = g_bank.tick(millis());
+        if (e.any) {
+            if (e.err) Serial.printf("[BUS] %s -> %s FAILED: %s\n", e.sel, e.state, e.err);
+            else       Serial.printf("[BUS] %s -> %s arrived\n", e.sel, e.state);
+            if (std::strcmp(e.sel, "failsafe") != 0) reportState(e.sel, e.state, false, e.err);
+            g_busReportDue = true;
+        }
+    }
+    if (g_servoPending && !g_bank.busy() && !sliderBusy && !cmdPending) {
+        runServoOrder();
+        g_servoPending = false;
+    }
+    if (!g_bank.moving() && (g_busReportDue || millis() - g_lastBusReportMs >= topo::nodelink::kBusReportMs)) sendBusReport();
+}
+#endif
+
+// A pass of loop() that takes long enough to stall the link says so, with where the time went (2026-11-01: a bus board
+// stopped acknowledging the brain after a servo was numbered, without restarting, and nothing said why).
+static uint32_t g_loopStartMs = 0, g_busTickMs = 0;
+static void noteSlowLoop() {
+    const uint32_t took = millis() - g_loopStartMs;
+    if (took < 250) return;
+    Serial.printf("[LOOP] slow pass: %lu ms (bus bank %lu ms)\n", (unsigned long)took, (unsigned long)g_busTickMs);
+}
+
 void loop() {
+    g_loopStartMs = millis(); g_busTickMs = 0;
     watchdog::pet();
     { static uint32_t lastTry = 0; if (!g_plugTask && millis() - lastTry > 5000) { lastTry = millis(); startPlugTask(); } }
     WiFiProvisioner::maintain();
@@ -1952,13 +2180,29 @@ void loop() {
 #endif
 
     tickFailsafe();
+#if HAS_LINEAR
+    { const uint32_t t = millis(); tickBusBank(); g_busTickMs = millis() - t; }
+#endif
 
     // Drain a pending SET. Servos are only ever touched from here.
     bool have = false;
     topo::nodelink::SetCommand cmd;
     portENTER_CRITICAL(&cmdMux);
+    // A slider move waits while a valve on the same bus moves: one move at a time per board.
+#if HAS_LINEAR
+    if (cmdPending && !g_bank.moving()) { cmd = cmdSlot; cmdPending = false; have = true; }
+#else
     if (cmdPending) { cmd = cmdSlot; cmdPending = false; have = true; }
+#endif
     portEXIT_CRITICAL(&cmdMux);
+#if HAS_LINEAR
+    // The slider's number rides its SET. A new number is a servo to set up (stepping mode, torque) before it can move.
+    if (have && !cmd.isServo && cmd.bus && cmd.bus != motor.id()) {
+        motor.setId((uint8_t)cmd.bus);
+        g_homing = HOME_NEEDED;
+        if (motor.begin()) Serial.printf("[BUS] the slider is servo %d\n", cmd.bus);
+    }
+#endif
 
     if (have) {
         bool commanded = false;
@@ -2089,4 +2333,5 @@ void loop() {
 #endif
         reportState(pendingSel, pendingState, false, why);
     }
+    noteSlowLoop();
 }

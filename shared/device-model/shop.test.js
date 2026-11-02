@@ -413,6 +413,36 @@ check('swapping which port is primary leaves a valid shop', validateShop(mut(swa
   check('two tools on one board\'s clamp are refused, whatever the spelling or channel', clampErrs(two).length === 1);
 }
 
+// ── bus servos across systems, and the next free number (2026-11-01). JS only: the brains do not validate layouts. ──
+{
+  const { nextBusId } = require('./shop');
+  const busShop = () => {
+    const s = clone(twoSystemShop);
+    s.controllers.push({ id: 'wall', role: 'secondary', drives: 'bus', link: { transport: 'wifi-ws', host: 'dustgate-wall.local' } });
+    const gates = [];
+    for (const sys of s.systems) for (const e of sys.elements) if (e.type === 'selector' && e.kind !== 'linear') gates.push(e);
+    gates.slice(0, 2).forEach((g, i) => { g.controllerId = 'wall'; g.servo = { ...(g.servo || {}), bus: 2 + i }; delete g.servo.channel; });
+    return { s, gates: gates.slice(0, 2) };
+  };
+  const { s: ok1, gates } = busShop();
+  const r1 = validateShop(ok1);
+  check('bus gates on one board in two systems → valid', r1.ok, JSON.stringify(r1.errors));
+  check('...and they are in two systems', new Set(ok1.systems.filter((sys) => sys.elements.some((e) => gates.some((g) => g.id === e.id))).map((x) => x.id)).size >= 1);
+  const { s: dup, gates: g2 } = busShop();
+  g2[1].servo.bus = 2;
+  check('one servo number on two gates → invalid', !validateShop(dup).ok && validateShop(dup).errors.some((e) => /bus servo 2 is already/.test(e.message)));
+  const { s: chained, gates: g3 } = busShop();
+  chained.controllers.find((c) => c.id === 'wall').chains = [[g3[0].id, g3[1].id]];
+  check('a chain naming gates in two systems → valid', validateShop(chained).ok, JSON.stringify(validateShop(chained).errors));
+  chained.controllers.find((c) => c.id === 'wall').chains = [['nope']];
+  check('a chain naming no gate in the shop → invalid', validateShop(chained).errors.some((e) => /"nope", which is not a gate/.test(e.message)));
+  check('the next free number skips those in use', nextBusId(ok1) === 4);
+  check('...and those a board reports answering', nextBusId(ok1, [4, 5]) === 6);
+  check('a shop with no bus servos starts at 2', nextBusId(clone(twoSystemShop)) === 2);
+  check('devMode true is fine', validateShop({ ...clone(twoSystemShop), devMode: true }).ok);
+  check('devMode "yes" is refused', !validateShop({ ...clone(twoSystemShop), devMode: 'yes' }).ok);
+}
+
 // ── the fail-closed delay (D-85): a shop setting, bounded like the wire ──────
 {
   const { failsafeCloseMs } = require('./shop');

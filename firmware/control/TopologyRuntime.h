@@ -1812,7 +1812,7 @@ private:
                         if (close.size() >= nodelink::kMaxFailsafeGates) break;
                         JsonObject c = close.createNestedObject();
                         c["drive"]   = set["drive"];
-                        c["channel"] = set["channel"];
+                        if (set.containsKey("bus")) c["bus"] = set["bus"]; else c["channel"] = set["channel"];
                         if (_eq(set["drive"], "servo")) { c["angle"] = set["angle"]; c["holdAtRest"] = set["holdAtRest"]; }
                         else c["positionMm"] = set["positionMm"];
                     }

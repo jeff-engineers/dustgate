@@ -2,7 +2,7 @@
  * What a board is FLASHED to drive, and who gets to say so.
  *
  * `Controller.drives` in shared/device-model/topology.js is a CACHE of a hardware
- * fact, not a setting. The board already knows: a node reports it as `caps.linear`
+ * fact, not a setting. The board already knows: a node reports it as `caps.bus`
  * in its WELCOME and the primary as `hasLinear` in its status, both straight from
  * HAS_LINEAR in the firmware, which is derived from the pin map and so cannot
  * disagree with the hardware. The cache exists only so the canvas can draw the
@@ -18,7 +18,7 @@
 // The budget, not a literal: this said "four" for a month after boards dropped to two channels (2026-10-17).
 import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
 
-export type Drives = 'servo' | 'linear';
+export type Drives = 'servo' | 'bus';
 
 /** What a board with nothing reported and nothing cached is assumed to drive.
  *  Matches `c.drives || 'servo'` in the validator — and so matches every layout
@@ -27,12 +27,12 @@ export const DEFAULT_DRIVES: Drives = 'servo';
 
 /** The primary's own report, from its status. Null when it has not said. */
 export function drivesFromHasLinear(hasLinear: unknown): Drives | null {
-  return typeof hasLinear === 'boolean' ? (hasLinear ? 'linear' : 'servo') : null;
+  return typeof hasLinear === 'boolean' ? (hasLinear ? 'bus' : 'servo') : null;
 }
 
 /** A node's report, from its WELCOME caps. Null when it has not said. */
-export function drivesFromCaps(caps: { linear?: number } | null | undefined): Drives | null {
-  return caps && typeof caps.linear === 'number' ? (caps.linear > 0 ? 'linear' : 'servo') : null;
+export function drivesFromCaps(caps: { bus?: number } | null | undefined): Drives | null {
+  return caps && typeof caps.bus === 'number' ? (caps.bus > 0 ? 'bus' : 'servo') : null;
 }
 
 /**
@@ -48,13 +48,14 @@ export function resolveDrives(reported: Drives | null, cached: Drives | null | u
 
 /** Can a board driving `drives` host a selector of `kind`?
  *
- *  Never both: a sliding gate needs the serial bus and a valve needs the PWM bank,
- *  and the two builds contend for the same pads (config.h #errors on a pin map
- *  claiming both). So this is an equality test, not a capacity one — capacity is a
- *  separate question asked only of a board that passes this. */
+ *  A bus board takes any gate (valves, manifolds and one slider, 2026-11-01); a PWM board takes no slider — its bus pads
+ *  are PWM pads (config.h #errors on a pin map claiming both). Capacity is a separate question. */
 export function canHost(drives: Drives, kind: string): boolean {
-  return drives === (kind === 'linear' ? 'linear' : 'servo');
+  return drives === 'bus' || kind !== 'linear';
 }
+
+/** Servos one bus board drives — MAX_BUS_SERVOS_PER_HOST in topology.js, kMaxBusServos in NodeLink.h. */
+export const BUS_SERVOS_PER_BOARD = 6;
 
 /**
  * Write the cache onto a controller entry, or clear it.
@@ -66,7 +67,7 @@ export function canHost(drives: Drives, kind: string): boolean {
 export function applyDrivesCache(controller: Record<string, unknown>, drives: Drives | null): void {
   if (drives === null) return;                     // never heard from it — leave the cache alone
   if (drives === 'servo') delete controller['drives'];
-  else controller['drives'] = 'linear';
+  else controller['drives'] = 'bus';
 }
 
 /** A shop with more gates of one kind than ports to plug them into. */
@@ -81,11 +82,9 @@ export interface PortShortfall {
 /**
  * Gates drawn with nowhere to plug them in, counted PER KIND.
  *
- * The two capacities never substitute for each other, which is the whole reason
- * this counts twice instead of once: a PWM board offers servo channels and no
- * slider port, a slider board offers one rack and no channels, and the two builds
- * contend for the same pads. Four spare servo channels are no help whatsoever to a
- * second sliding gate, and a single total would say the shop had room.
+ * Counted twice, not once: a PWM board offers servo channels and no slider; a bus board offers BUS_SERVOS_PER_BOARD
+ * servos of which at most one may be a slider (its two endstop inputs). Spare PWM channels are no help to a slider, and a
+ * single total would say the shop had room.
  *
  * `servoPortsPerBoard` is passed in rather than defined here so this file does not
  * become a fourth place claiming the number 4 — the callers already have it
@@ -98,17 +97,19 @@ export interface PortShortfall {
 export function portShortfalls(
   boardDrives: Drives[], gateKinds: string[], servoPortsPerBoard: number,
 ): PortShortfall[] {
-  let servoPorts = 0, sliderPorts = 0;
+  let servoPorts = 0, sliderPorts = 0, busBoards = 0;
   for (const d of boardDrives) {
-    if (d === 'linear') sliderPorts += 1; else servoPorts += servoPortsPerBoard;
+    if (d === 'bus') { sliderPorts += 1; busBoards += 1; } else servoPorts += servoPortsPerBoard;
   }
   let servoGates = 0, sliderGates = 0;
   for (const k of gateKinds) {
     if (k === 'linear') sliderGates += 1; else servoGates += 1;
   }
   const out: PortShortfall[] = [];
-  if (servoGates > servoPorts) out.push({ kind: 'servo', gates: servoGates, ports: servoPorts });
-  if (sliderGates > sliderPorts) out.push({ kind: 'linear', gates: sliderGates, ports: sliderPorts });
+  // Valves fill PWM channels and whatever room the bus boards have left after their sliders.
+  const valveRoom = servoPorts + busBoards * BUS_SERVOS_PER_BOARD - Math.min(sliderGates, sliderPorts);
+  if (servoGates > valveRoom) out.push({ kind: 'servo', gates: servoGates, ports: valveRoom });
+  if (sliderGates > sliderPorts) out.push({ kind: 'bus', gates: sliderGates, ports: sliderPorts });
   return out;
 }
 
@@ -116,12 +117,12 @@ export function portShortfalls(
  *  caller adds what to DO about it once, however many shortfalls it is reporting. */
 export function shortfallText(s: PortShortfall): string {
   const one = s.gates === 1;
-  if (s.kind === 'linear') {
-    return `${s.gates} sliding ${one ? 'gate needs' : 'gates need'} a slider board and this shop has `
-         + `${s.ports === 0 ? 'none' : String(s.ports)} — a slider board drives one rack, so each rack needs its own.`;
+  if (s.kind === 'bus') {
+    return `${s.gates} sliding ${one ? 'gate needs' : 'gates need'} a bus board and this shop has `
+         + `${s.ports === 0 ? 'none' : String(s.ports)} — a bus board drives one slider, so each needs its own.`;
   }
-  return `${s.gates} ${one ? 'gate needs' : 'gates need'} a servo channel and this shop has `
-       + `${s.ports === 0 ? 'none' : `only ${s.ports}`} — each servo board drives ${SERVO_CHANNELS_PER_BOARD}.`;
+  return `${s.gates} ${one ? 'gate needs' : 'gates need'} a servo and this shop's boards have room for `
+       + `${s.ports === 0 ? 'none' : `only ${s.ports}`} — each PWM board drives ${SERVO_CHANNELS_PER_BOARD}, each bus board ${BUS_SERVOS_PER_BOARD}.`;
 }
 
 /**

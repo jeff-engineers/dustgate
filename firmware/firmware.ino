@@ -6,7 +6,7 @@
 // either way:
 //
 //   xiao_c5_primary         four PWM ball valves, HAS_LINEAR 0
-//   xiao_c5_linear_primary  one ST3215 on a serial bus + two endstops,
+//   xiao_c5_bus_primary  one ST3215 on a serial bus + two endstops,
 //                           HAS_LINEAR 1
 //
 // Configuration is entirely in config.h; the pin map is boards/xiao_c5.h.
@@ -4249,7 +4249,7 @@ void loop() {
                     const topo::RemoteActuatorBus::NodeInfo ni = g_remoteBuses[i].info();
                     // The image is picked by what the board DRIVES (a slider is a different program from
                     // a PWM bank).
-                    const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(ni.capLinear > 0 ? 1 : 0);
+                    const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(ni.capBus > 0 ? 1 : 0);
                     topo::NodeImageView iv; iv.present = img.present; iv.fw = img.fw;
                     topo::writeNodeEntry(arr, g_remoteBuses[i], g_remoteBuses[i].nodeId(), g_remoteBuses[i].host(),
                                          g_nodeRegistry.name(i), iv);
@@ -4356,12 +4356,12 @@ static void startNodeUpdate(const char* id) {
     if (idx < 0) { Serial.printf("[OTA] no such board: %s\n", id); return; }
     topo::RemoteActuatorBus& bus = g_remoteBuses[idx];
     const topo::RemoteActuatorBus::NodeInfo n = bus.info();
-    const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(n.capLinear > 0 ? 1 : 0);
+    const HttpApiServer::NodeImage img = HttpApiServer::nodeImage(n.capBus > 0 ? 1 : 0);
     const char* why = nullptr;
     if (!img.present)                                    why = "no image staged on the primary (bash dev.sh ota)";
     else if (strcmp(n.fw, img.fw) == 0)                  why = "already running that image";
     else if (g_topoRuntime.collectorOn() || g_nodeBus.busy()) why = "a tool is running - wait until the shop is quiet";
-    if (why || !bus.requestOta(HttpApiServer::nodeImagePath(n.capLinear > 0 ? 1 : 0), img.size, img.md5, img.fw, why)) {
+    if (why || !bus.requestOta(HttpApiServer::nodeImagePath(n.capBus > 0 ? 1 : 0), img.size, img.md5, img.fw, why)) {
         Serial.printf("[OTA] %s refused: %s\n", id, why ? why : "?");
         bus.noteOtaRefused(why);
         return;
