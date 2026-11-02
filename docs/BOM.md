@@ -210,17 +210,19 @@ and is the only route for a collector with no fob; the servo is what ships,
 because "open the fob and solder across the button" is an install step a
 woodworker cannot perform.
 
-## 5. The slider — only on a rack build
+## 5. The bus board — ST3215 gates and the slider
 
-Its own small board: different pin map (D6/D7 bus, D8/D9 endstops) and 12 V at
+Its own board: a XIAO on Seeed's Bus Servo Driver Board, a different pin map (D6/D7 bus, D8/D9 endstops) and 12 V at
 the servo rather than through a buck. **Never shares a board with PWM servos** —
-`config.h` `#error`s if a pin map claims both.
+`config.h` `#error`s if a pin map claims both. Wired on the "Bus board" tab of
+[`carrier-wiring.html`](carrier-wiring.html).
 
 | Part | Qty | Notes |
 |---|---|---|
 | **ST3215** serial bus servo, 12 V | 1 | 30 kg·cm. Waveshare SKU 22414 ($21.99) or RobotShop ($28.24 incl. tariffs). **Not the 7.4 V variant** |
 | Endstop switch, NC | 2 | D8/D9. Normally-CLOSED so a snapped lead reads as triggered and stops the carriage |
-| Bus interface | 1 | The **Seeed XIAO Bus Servo Adapter** (what the bench slider uses), or hand-built: a 74LVC1G125 buffer per archive/WIRING.md §7 — not just a 1 kΩ on TX |
+| Bus interface | 1 | The **Seeed Bus Servo Driver Board for XIAO** (~$6; what the bench board uses). Its buck also powers the XIAO. JP1/JP2 left open |
+| 2.54 mm pin header, 1×7 | 2 | For the driver board's unfitted J2/J3: the endstops, screen, button and pixel come off them |
 
 ---
 
