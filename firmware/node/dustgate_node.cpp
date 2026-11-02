@@ -2093,7 +2093,17 @@ static void tickBusBank() {
 }
 #endif
 
+// A pass of loop() that takes long enough to stall the link says so, with where the time went (2026-11-01: a bus board
+// stopped acknowledging the brain after a servo was numbered, without restarting, and nothing said why).
+static uint32_t g_loopStartMs = 0, g_busTickMs = 0;
+static void noteSlowLoop() {
+    const uint32_t took = millis() - g_loopStartMs;
+    if (took < 250) return;
+    Serial.printf("[LOOP] slow pass: %lu ms (bus bank %lu ms)\n", (unsigned long)took, (unsigned long)g_busTickMs);
+}
+
 void loop() {
+    g_loopStartMs = millis(); g_busTickMs = 0;
     watchdog::pet();
     { static uint32_t lastTry = 0; if (!g_plugTask && millis() - lastTry > 5000) { lastTry = millis(); startPlugTask(); } }
     WiFiProvisioner::maintain();
@@ -2171,7 +2181,7 @@ void loop() {
 
     tickFailsafe();
 #if HAS_LINEAR
-    tickBusBank();
+    { const uint32_t t = millis(); tickBusBank(); g_busTickMs = millis() - t; }
 #endif
 
     // Drain a pending SET. Servos are only ever touched from here.
@@ -2323,4 +2333,5 @@ void loop() {
 #endif
         reportState(pendingSel, pendingState, false, why);
     }
+    noteSlowLoop();
 }
