@@ -30,8 +30,46 @@
 #include <lwip/netif.h>
 #include <lwip/dhcp.h>
 #include <lwip/prot/dhcp.h>
+#include <esp_mac.h>
+#include <esp_wifi.h>
+#include "JoinPlan.h"
 
 namespace WiFiProvisioner {
+
+// The DHCP client's state right now (lwIP's DHCP_STATE_*), or 0xFF before it exists.
+inline uint8_t _dhcpState() {
+    esp_netif_t* en = WiFi.STA.netif();
+    struct netif* ni = en ? (struct netif*)esp_netif_get_netif_impl(en) : nullptr;
+    struct dhcp* d = ni ? netif_dhcp_data(ni) : nullptr;
+    return d ? d->state : 0xFF;
+}
+
+// Which MAC the board joins with: its own, or its locally administered twin
+// (JoinPlan.h — the board switches when a router keeps offering it an address
+// something else is using). Kept in NVS so a board that switched stays switched:
+// the router knows the twin by its lease, and flipping back each boot would
+// walk straight back into the address that was taken.
+static const char* const NVS_TWIN_MAC = "twinmac";
+inline bool _twinMacSaved() {
+    Preferences p; p.begin(NVS_NS, /*readOnly=*/true);
+    const bool twin = p.getBool(NVS_TWIN_MAC, false);
+    p.end(); return twin;
+}
+inline void _saveTwinMac(bool twin) {
+    Preferences p; p.begin(NVS_NS, /*readOnly=*/false);
+    p.putBool(NVS_TWIN_MAC, twin);
+    p.end();
+}
+// Set while the radio is in STA mode and not associated.
+inline void _applyMac(bool twin) {
+    uint8_t own[6], use[6];
+    esp_read_mac(own, ESP_MAC_WIFI_STA);
+    if (twin) joinplan::twinMac(own, use); else memcpy(use, own, 6);
+    const esp_err_t e = esp_wifi_set_mac(WIFI_IF_STA, use);
+    Serial.printf("[WiFi] joining as %02X:%02X:%02X:%02X:%02X:%02X (%s)%s\n", use[0], use[1], use[2], use[3], use[4], use[5],
+                  twin ? "this board's twin MAC" : "this board's own MAC", e == ESP_OK ? "" : " - could not set it, using the driver's");
+}
+static volatile bool s_associated = false;
 
 // The DHCP client's own state, read straight out of lwIP while the board waits
 // for an address: which address it was offered, by whom, and whether it is
@@ -343,9 +381,11 @@ inline bool begin() {
     const wifi_event_id_t joinLog = WiFi.onEvent([](WiFiEvent_t ev, WiFiEventInfo_t info) {
         switch (ev) {
             case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+                s_associated = true;
                 Serial.printf("\n[WiFi] t=%lums associated, channel %u\n", millis(), info.wifi_sta_connected.channel);
                 break;
             case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+                s_associated = false;
                 Serial.printf("\n[WiFi] t=%lums dropped, reason %u (%s), RSSI %d\n", millis(),
                               info.wifi_sta_disconnected.reason,
                               WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason),
@@ -359,10 +399,7 @@ inline bool begin() {
     });
 #ifdef WIFI_STA_SSID
     // Developer mode: hardcoded credentials take priority over NVS
-    DEBUG_PRINT(F("[WiFi] Connecting to ")); DEBUG_PRINTLN(F(WIFI_STA_SSID));
-    WiFi.mode(WIFI_STA);
-    _applyBandMode();
-    WiFi.begin(WIFI_STA_SSID, WIFI_STA_PASS);
+    const String ssid = WIFI_STA_SSID, pass = WIFI_STA_PASS;
 #else
     // End-user mode: load credentials from NVS
     Preferences prefs;
@@ -375,12 +412,15 @@ inline bool begin() {
         DEBUG_PRINTLN(F("[WiFi] No credentials stored."));
         _runPortal(); // never returns
     }
+#endif
 
     DEBUG_PRINT(F("[WiFi] Connecting to ")); Serial.println(ssid);
+    bool twin = _twinMacSaved();
     WiFi.mode(WIFI_STA);
     _applyBandMode();
+    _applyMac(twin);
+    s_associated = false;
     WiFi.begin(ssid.c_str(), pass.c_str());
-#endif
 
     // 30s, raised from 12s on 2026-09-11.
     //
@@ -401,14 +441,42 @@ inline bool begin() {
     // minute to offer its portal. Too short and a board with GOOD credentials
     // gives up and demands the user set up WiFi that is already correct — which
     // is worse, because the portal is a dead end when nothing is wrong.
-    static const unsigned long kConnectTimeoutMs = 30000UL;
-
-    unsigned long t = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t < kConnectTimeoutMs) {
+    //
+    // That is joinplan::kAssocTimeoutMs, and it now bounds only ASSOCIATING. Once
+    // the board has associated, the password is known good and the portal is
+    // never the answer: JoinPlan.h decides between waiting, rejoining and
+    // changing MAC (the router offering an address something else holds).
+    const unsigned long t = millis();
+    joinplan::Attempt attempt; attempt.restart(t);
+    uint8_t lastDhcp = 0xFF;
+    while (WiFi.status() != WL_CONNECTED) {
         delay(250);
         char line[128];
         if (_dhcpLine(line, sizeof line)) { Serial.println(); Serial.println(line); }
         else DEBUG_PRINT(F("."));
+        const uint8_t dhcp = _dhcpState();
+        if (dhcp == DHCP_STATE_BACKING_OFF && lastDhcp != DHCP_STATE_BACKING_OFF) attempt.declines++;
+        lastDhcp = dhcp;
+        attempt.associated = s_associated;
+
+        const joinplan::Act act = attempt.next(millis());
+        if (act == joinplan::Act::Wait) continue;
+        if (act == joinplan::Act::Portal) break;
+        if (act == joinplan::Act::SwitchMac) {
+            twin = !twin;
+            Serial.printf("\n[WiFi] the router keeps offering an address something else answers for (%d declines) -"
+                          " asking again as a new device\n", attempt.declines);
+            _saveTwinMac(twin);
+        } else {
+            Serial.printf("\n[WiFi] associated %lus and nothing answered for an address - joining again\n",
+                          (millis() - attempt.startMs) / 1000);
+        }
+        WiFi.disconnect();
+        delay(200);
+        if (act == joinplan::Act::SwitchMac) _applyMac(twin);
+        s_associated = false; lastDhcp = 0xFF;
+        WiFi.begin(ssid.c_str(), pass.c_str());
+        attempt.restart(millis());
     }
     Serial.println();
     WiFi.removeEvent(joinLog);
@@ -437,7 +505,7 @@ inline bool begin() {
                 break;
             case WL_DISCONNECTED:
                 DEBUG_PRINTLN(F(" (STILL TRYING) — found it, never finished associating."));
-                DEBUG_PRINTLN(F("       A slow or busy AP. Raising kConnectTimeoutMs is"));
+                DEBUG_PRINTLN(F("       A slow or busy AP. Raising joinplan::kAssocTimeoutMs is"));
                 DEBUG_PRINTLN(F("       the honest fix if this is repeatable."));
                 // Status 6 is also what a board with NO ANTENNA reports (the
                 // link log then shows wifi_down reason 201, no AP found, on every
