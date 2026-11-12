@@ -304,6 +304,29 @@ inline bool begin() {
     // Both boards are mains-powered and one of them is holding a WebSocket open
     // for the whole session, so there is nothing to save here anyway.
     WiFi.setSleep(false);
+
+    // Every step of the join, with the driver's reason on each drop, for the
+    // connect window only. The status sampled at the timeout says where the
+    // board ended up, not how: a board that associated and was then thrown off
+    // over and over can end on the same status as one DHCP ignored, and the
+    // router's device list then disagrees with the diagnosis below.
+    const wifi_event_id_t joinLog = WiFi.onEvent([](WiFiEvent_t ev, WiFiEventInfo_t info) {
+        switch (ev) {
+            case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+                Serial.printf("\n[WiFi] t=%lums associated, channel %u\n", millis(), info.wifi_sta_connected.channel);
+                break;
+            case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+                Serial.printf("\n[WiFi] t=%lums dropped, reason %u (%s), RSSI %d\n", millis(),
+                              info.wifi_sta_disconnected.reason,
+                              WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason),
+                              info.wifi_sta_disconnected.rssi);
+                break;
+            case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+                Serial.printf("\n[WiFi] t=%lums got %s\n", millis(), IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+                break;
+            default: break;
+        }
+    });
 #ifdef WIFI_STA_SSID
     // Developer mode: hardcoded credentials take priority over NVS
     DEBUG_PRINT(F("[WiFi] Connecting to ")); DEBUG_PRINTLN(F(WIFI_STA_SSID));
@@ -356,6 +379,7 @@ inline bool begin() {
         DEBUG_PRINT(F("."));
     }
     Serial.println();
+    WiFi.removeEvent(joinLog);
 
     if (WiFi.status() != WL_CONNECTED) {
         // SAY WHY, not just that. A row of dots and "failed" is the same output

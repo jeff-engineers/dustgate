@@ -600,6 +600,17 @@ Everything else that search found is fixed (DONE.md). These two remain, found by
 
 ## UI
 
+- **Unpair any board, whatever its state (2026-11-12, jeff).** "We should have the ability to forget a node, regardless
+  of whether it's online, dead, or offline." Today Unpair is greyed on any board that drives a gate (Boards page,
+  `board-setup.component.ts` `[disabled]="r.gates > 0"`), so the "move them to another board first" message can never
+  show — the disabled button can't be tapped. Jeff's call: **the gates stay on the layout**. Planned shape: Unpair drops
+  the brain's pairing but keeps the board's controller on the layout as "not paired" (already valid —
+  `dustgate-planer-sensor` sits like that), its gates still wired to it. Pairing a replacement under the same name picks
+  them back up; or move the gates to another board and delete the empty one on the canvas. The confirm names what stays
+  ("its 1 gate stays on the layout; pair a new board as …, or move the gate to another board"). No schema or brain
+  change; truly board-less gates were the alternative and would need `controllerId` optional through the model, the
+  brain, routing and the canvas. Same on the canvas board menu.
+
 - **Replace drag-to-branch on a duct with "move this run here" (2026-09-07,
   jeff).** Today, dragging a branch dot tees in a passive leg. The more useful
   gesture is moving the RUN — put it where I want it and keep it there, the way
