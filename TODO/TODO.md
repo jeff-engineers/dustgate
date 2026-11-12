@@ -154,6 +154,8 @@ node — its servos share one brick, and the wire-length limit assumes only the 
      at a slow speed, against an uncoupled baseline at the SAME speed. 0 missed reads in ~11,000; moves land within 4
      counts. Still to measure: the same valve on a duct with the collector running (suction on the seat), and the
      smaller servos ordered. A ~5 kg·cm bus servo looks ample.
+     **The new ball-valve design, 2026-11-12 (jeff): ~20 % peak at 12 V on the ST3215, about what the prototype read** —
+     a gross figure; the valve's own share needs the uncoupled baseline at the same speed, as above.
      **The Feetech STS3032 is a good fit for later (jeff, 2026-11-01)** — 4.5 kg·cm stall / 1.5 kg·cm rated at 6 V, the
      same 12-bit magnetic encoder and STS protocol as the ST3215, metal gears, 1.2 A stall (vs 2.7 A, so roughly twice the
      wire run), ~$12 on AliExpress (dear in the US). Needs a 6 V supply for the servos (a 12→6 V buck on the board). The
