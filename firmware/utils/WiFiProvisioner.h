@@ -26,8 +26,38 @@
 // WiFiConfig.h provides the NVS constants, getHostname() and reset() without
 // including <WebServer.h> — safe alongside ESPAsyncWebServer.
 #include "WiFiConfig.h"
+#include <esp_netif_net_stack.h>
+#include <lwip/netif.h>
+#include <lwip/dhcp.h>
+#include <lwip/prot/dhcp.h>
 
 namespace WiFiProvisioner {
+
+// The DHCP client's own state, read straight out of lwIP while the board waits
+// for an address: which address it was offered, by whom, and whether it is
+// checking that address (CHECKING), turned it down because something else
+// answered for it (BACKING_OFF), or is still asking (SELECTING/REQUESTING).
+// Read-only and unlocked — a logging aid, never a decision. Returns false when
+// nothing changed since the last call, so the caller logs transitions only.
+inline bool _dhcpLine(char* out, size_t n) {
+    static uint32_t last = 0xFFFFFFFFu;
+    esp_netif_t* en = WiFi.STA.netif();
+    struct netif* ni = en ? (struct netif*)esp_netif_get_netif_impl(en) : nullptr;
+    struct dhcp* d = ni ? netif_dhcp_data(ni) : nullptr;
+    if (!d) return false;
+    const uint32_t key = ((uint32_t)d->state | ((uint32_t)d->tries << 8)) ^ ip4_addr_get_u32(&d->offered_ip_addr);
+    if (key == last) return false;
+    last = key;
+    static const char* const names[] = { "off", "requesting", "init", "rebooting", "rebinding", "renewing",
+        "selecting", "informing", "checking (is anyone else on it?)", "permanent", "bound",
+        "releasing", "backing off (declined: something else answered for it)" };
+    const char* nm = d->state < sizeof(names) / sizeof(names[0]) ? names[d->state] : "?";
+    char offered[16], server[16];
+    ip4addr_ntoa_r(&d->offered_ip_addr, offered, sizeof offered);
+    ip4addr_ntoa_r(ip_2_ip4(&d->server_ip_addr), server, sizeof server);
+    snprintf(out, n, "[DHCP] t=%lums %s, try %u, offered %s by %s", millis(), nm, d->tries, offered, server);
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Minimal portal HTML — served from the setup AP
@@ -376,7 +406,9 @@ inline bool begin() {
     unsigned long t = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - t < kConnectTimeoutMs) {
         delay(250);
-        DEBUG_PRINT(F("."));
+        char line[128];
+        if (_dhcpLine(line, sizeof line)) { Serial.println(); Serial.println(line); }
+        else DEBUG_PRINT(F("."));
     }
     Serial.println();
     WiFi.removeEvent(joinLog);
