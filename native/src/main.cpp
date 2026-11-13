@@ -509,7 +509,7 @@ static void loadImages() {
 }
 
 static topo::NodeImageView imageViewFor(dgbrain::Node& n) {
-    const int k = n.session.info().capLinear > 0 ? 1 : 0;
+    const int k = n.session.info().capBus > 0 ? 1 : 0;
     topo::NodeImageView v; v.present = g_images[k].present; v.fw = g_images[k].fw.c_str();
     return v;
 }
@@ -517,11 +517,14 @@ static topo::NodeImageView imageViewFor(dgbrain::Node& n) {
 static std::string nodesJson() {
     DynamicJsonDocument d(8192);
     JsonArray a = d.createNestedArray("nodes");
-    for (auto& kv : g_hub->nodes()) topo::writeNodeEntry(a, kv.second->session, kv.first.c_str(), kv.first.c_str(), kv.second->name.c_str(), imageViewFor(*kv.second));
+    for (auto& kv : g_hub->nodes()) {
+        topo::writeNodeEntry(a, kv.second->session, kv.first.c_str(), kv.first.c_str(), kv.second->name.c_str(), imageViewFor(*kv.second));
+        topo::addBusAndLink(a[a.size() - 1].as<JsonObject>(), kv.second->session);
+    }
     // This board is a board too, and has no hardware of its own: the same shape the ESP32 reports.
     JsonObject self = d.createNestedObject("self");
     self["id"] = g_hub->primaryId(); self["name"] = g_hub->primaryId(); self["fw"] = "native"; self["board"] = "native";
-    JsonObject sc = self.createNestedObject("caps"); sc["servos"] = 0; sc["linear"] = 0;
+    JsonObject sc = self.createNestedObject("caps"); sc["servos"] = 0; sc["bus"] = 0;
     std::string o; serializeJson(d, o); return o;
 }
 
@@ -714,6 +717,32 @@ public:
         if (!b->jog(ch, angle, detach)) { why = "the board refused the jog"; return false; }
         return true;
     }
+    // The paired board a controller id names (bus servos are on nodes; the Pi has no bus of its own).
+    std::shared_ptr<dgbrain::Node> boardFor(const std::string& cid) {
+        for (auto& kv : g_hub->nodes()) if (topo::sameBoard(cid, kv.first, g_hub->primaryId())) return kv.second;
+        return nullptr;
+    }
+    bool jogBus(const std::string& cid, int bus, int angle, std::string& why) override {
+        auto n = boardFor(cid);
+        if (!n || !n->session.online()) { why = "that board is not linked"; return false; }
+        if (n->session.info().capBus <= 0) { why = "that board has no servo bus"; return false; }
+        if (!n->session.jogBus(bus, angle)) { why = "the board refused the move"; return false; }
+        return true;
+    }
+    uint32_t servoOp(const std::string& cid, const char* op, int bus, int to, int on, std::string& why) override {
+        auto n = boardFor(cid);
+        if (!n || !n->session.online()) { why = "that board is not linked"; return 0; }
+        if (n->session.info().capBus <= 0) { why = "that board has no servo bus"; return 0; }
+        if (g_rt.anyGateMoving()) { why = "a gate is moving - try again in a moment"; return 0; }
+        const uint32_t seq = n->session.servo(op, bus, to, on);
+        if (!seq) why = "the board is busy with the last one - try again";
+        else dglog::linef("[API] servo %s on %s (bus %d, to %d)\n", op, cid.c_str(), bus, to);
+        return seq;
+    }
+    std::string servoReply(const std::string& cid, uint32_t seq) override {
+        auto n = boardFor(cid);
+        return n ? n->session.servoReply(seq) : std::string();
+    }
     void resetAll() override {
         clearLayout();
         std::vector<std::string> ids; for (auto& kv : g_hub->nodes()) ids.push_back(kv.first);
@@ -751,7 +780,7 @@ public:
     bool updateNode(const std::string& id, std::string& why) override {
         auto n = g_hub->find(id);
         if (!n) { why = "that board is not paired"; return false; }
-        const int k = n->session.info().capLinear > 0 ? 1 : 0;
+        const int k = n->session.info().capBus > 0 ? 1 : 0;
         if (!g_images[k].present) { why = "no firmware image is staged for that kind of board"; return false; }
         if (g_rt.collectorOn() || g_hub->bus().busy()) { why = "a tool is running - wait until the shop is quiet"; return false; }
         const char* w = "";

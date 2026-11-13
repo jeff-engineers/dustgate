@@ -106,6 +106,9 @@ svg.canvas, svg.canvas text { -webkit-user-select: none; user-select: none; }
    beside it as the ordinary case. Two selectors for one state, because the field is
    also unreachable-by-pointer on touch until this matches. */
 :host input:focus, :host input.editing { -webkit-user-select: text; user-select: text; }
+/* ...and a warning in the guide bar: it is the one thing on this screen a person copies, to paste into a report or a
+   question (jeff, 2026-11-01). Only a warning: an ordinary hint is still not worth a long-press callout. */
+:host .guide.warn { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 
 /* Zoom control. Floating over the canvas rather than in the toolbar, which
    already wraps to two rows on a phone. Bottom-right, thumb-reachable, and clear

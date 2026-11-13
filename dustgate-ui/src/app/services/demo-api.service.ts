@@ -12,6 +12,7 @@ import {
   NodeLinkState,
   SenseReport,
   SystemStatus,
+  ServoOp, ServoReply,
 } from './api.service';
 import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
 import { clampBoardOf, clampOf } from './shop-doc';
@@ -280,6 +281,18 @@ export class DemoApiService extends ApiService {
     return { ok: true };
   }
   private servoAngles = new Map<string, number>();
+
+  /** The demo's bus boards have no servos to move; every order succeeds, and `find` finds one, so Add a servo can be walked. */
+  override async jogBus(controllerId: string, bus: number, angle: number): Promise<unknown> {
+    this.servoAngles.set(`${controllerId}:bus${bus}`, angle);
+    return { ok: true };
+  }
+  override async servoOp(_controllerId: string, op: ServoOp): Promise<ServoReply> {
+    await this.delay(400);
+    if (op === 'find') return { ok: true, found: 'one' };
+    if (op === 'scan') return { ok: true, ids: [] };
+    return { ok: true };
+  }
 
   private delay(ms: number): Promise<void> {
     return new Promise(r => setTimeout(r, ms));
@@ -635,7 +648,7 @@ export class DemoApiService extends ApiService {
       lastSeen: Date.now(),
       board: primary?.board ?? 'xiao_c5',
       fw: '1.0.0-demo',
-      caps: { servos: SERVO_CHANNELS_PER_BOARD, linear: 0, ct: 1 },
+      caps: { servos: SERVO_CHANNELS_PER_BOARD, bus: 0, ct: 1 },
       clampIn: true,
       // '' is how the model spells "this board", and it is what a layout writes.
       sense: this.senseFor('', true),
@@ -679,7 +692,7 @@ export class DemoApiService extends ApiService {
       // On real hardware caps come from the node's WELCOME and the layout is the
       // copy; here there is nothing else to ask, so the simulated board is made
       // to agree with the shop it is standing in rather than contradict it.
-      const linear = this.drivesOfController(host) === 'linear';
+      const linear = this.drivesOfController(host) === 'bus';
       return {
         id: host,                          // the node's host IS its controllerId
         host,
@@ -695,8 +708,8 @@ export class DemoApiService extends ApiService {
         // ct comes from the board's own declaration, not from a blanket 1 —
         // see demoNodes. Omitted when none, matching the wire.
         caps: linear
-          ? { servos: 0, linear: 1 }
-          : { servos: known?.servos ?? 0, linear: 0,
+          ? { servos: 0, bus: 1 }
+          : { servos: known?.servos ?? 0, bus: 0,
               ...(known?.ct ? { ct: known.ct } : {}) },
         ...(known?.ct ? { sense: this.senseFor(host, online) } : {}),
         // Its clamp is plugged in (CLAMP, 2026-10-09) — said only while it is online, as a real brain forgets it on a drop.
@@ -707,9 +720,9 @@ export class DemoApiService extends ApiService {
   }
 
   /** What the demo layout says a board is flashed to drive. */
-  private drivesOfController(id: string): 'servo' | 'linear' {
+  private drivesOfController(id: string): 'servo' | 'bus' {
     const cs = (this.td?.topology as { controllers?: Array<{ id: string; drives?: string }> })?.controllers ?? [];
-    return cs.find(c => c.id === id)?.drives === 'linear' ? 'linear' : 'servo';
+    return cs.find(c => c.id === id)?.drives === 'bus' ? 'bus' : 'servo';
   }
 
   /** The PRIMARY's own capability, reported in status as hasLinear.
@@ -721,7 +734,7 @@ export class DemoApiService extends ApiService {
   private syncHasLinear(): void {
     const cs = (this.td?.topology as { controllers?: Array<{ id: string; role: string; drives?: string }> })?.controllers ?? [];
     const primary = cs.find(c => c.role === 'primary');
-    this.d.hasLinear = primary ? primary.drives === 'linear' : true;
+    this.d.hasLinear = primary ? primary.drives === 'bus' : true;
   }
 
   // ── Config ────────────────────────────────────────────────────────────────────

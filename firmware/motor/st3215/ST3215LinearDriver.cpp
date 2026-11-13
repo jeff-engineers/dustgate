@@ -101,13 +101,17 @@ static inline bool isAwayFromDatum(long delta) {
 
 // -----------------------------------------------------------------------------
 bool ST3215LinearDriver::begin() {
-    if (!_bus.begin(ST3215_BAUD)) {
+    if (!_bus.baud() && !_bus.begin(ST3215_BAUD)) {
         Serial.println(F("[ST3215] UART would not open — check PIN_SERVO_BUS_* in the board header."));
         return false;
     }
+    // NO NUMBER YET (2026-11-01): the slider's servo is numbered like every bus servo, shop-wide, and the number arrives
+    // on its first SET. Until then there is nothing to talk to — and nothing must be set to stepping mode, because a servo
+    // answering as 1 is a NEW servo, which may be a valve's.
+    if (!_id) return false;
 
     uint8_t err = 0;
-    if (!_bus.ping(ST3215_SERVO_ID, &err)) {
+    if (!_bus.ping(_id, &err)) {
         // A silent bus cannot say WHY it is silent, and the reasons are
         // indistinguishable from in here. So lead with the one that is both most
         // likely and cheapest to check, and point at the ladder for the rest.
@@ -120,7 +124,7 @@ bool ST3215LinearDriver::begin() {
         // XIAO runs happily off USB alone while the servo rail is dead, so the
         // board being alive enough to print this says nothing about the jack.
         Serial.print(F("[ST3215] no servo answered at id "));
-        Serial.print(ST3215_SERVO_ID);
+        Serial.print(_id);
         Serial.print(F(" ("));
         Serial.print(_bus.lastError());
         Serial.println(F(")."));
@@ -144,9 +148,9 @@ bool ST3215LinearDriver::begin() {
     // through the register-55 EEPROM lock (see ST3215Bus::writeEeprom8), which
     // is what makes them survive the next power cycle instead of reading back
     // correct and evaporating.
-    if (!_bus.writeEeprom8(ST3215_SERVO_ID, ST_REG_MODE, 3) ||
-        !_bus.writeEeprom16(ST3215_SERVO_ID, ST_REG_MIN_ANGLE, 0) ||
-        !_bus.writeEeprom16(ST3215_SERVO_ID, ST_REG_MAX_ANGLE, 0)) {
+    if (!_bus.writeEeprom8(_id, ST_REG_MODE, 3) ||
+        !_bus.writeEeprom16(_id, ST_REG_MIN_ANGLE, 0) ||
+        !_bus.writeEeprom16(_id, ST_REG_MAX_ANGLE, 0)) {
         Serial.print(F("[ST3215] could not set stepping mode: "));
         Serial.println(_bus.lastError());
         return false;
@@ -164,7 +168,7 @@ bool ST3215LinearDriver::begin() {
     enable(true);
 
     Serial.print(F("[ST3215] servo "));
-    Serial.print(ST3215_SERVO_ID);
+    Serial.print(_id);
     Serial.print(F(" ready at "));
     Serial.print(_bus.baud());
     Serial.print(F(" baud, "));
@@ -212,7 +216,7 @@ void ST3215LinearDriver::enable(bool on) {
     // and a log line every pass of loop() — which is what buried the log in
     // "torque off — position is no longer trustworthy" on 2026-08-28.
     if (on == _torque) return;
-    if (!_bus.write8(ST3215_SERVO_ID, ST_REG_TORQUE_ENABLE, on ? 1 : 0)) {
+    if (!_bus.write8(_id, ST_REG_TORQUE_ENABLE, on ? 1 : 0)) {
         Serial.print(F("[ST3215] torque write failed: "));
         Serial.println(_bus.lastError());
         return;
@@ -257,7 +261,7 @@ bool ST3215LinearDriver::sendSteps(long steps, uint16_t speed) {
     // Position, time and speed as ONE write. Setting GOAL_SPEED separately does
     // not work — the servo ran every move at maximum regardless (bench,
     // 2026-08-26). Speed is latched when the block lands.
-    if (!_bus.moveTo(ST3215_SERVO_ID, raw, speed)) {
+    if (!_bus.moveTo(_id, raw, speed)) {
         Serial.print(F("[ST3215] step command refused: "));
         Serial.println(_bus.lastError());
         return false;
@@ -318,7 +322,7 @@ void ST3215LinearDriver::sendNextChunk() {
 // -----------------------------------------------------------------------------
 long ST3215LinearDriver::stepsRemaining() {
     uint16_t raw = 0;
-    if (!_bus.read16(ST3215_SERVO_ID, ST_REG_PRESENT_POS, &raw)) return -1;
+    if (!_bus.read16(_id, ST_REG_PRESENT_POS, &raw)) return -1;
     // In step mode register 56 is a countdown of the steps still to go, with bit
     // 15 mirroring the commanded direction — NOT a position. `stepdump 12288`
     // wrote 0xB000 and watched it fall to 0x8004 (2026-08-28). Mask the
@@ -432,9 +436,9 @@ void ST3215LinearDriver::stop() {
     // which also CLEARS A LATCHED OVERLOAD: the state a blinking servo LED is
     // reporting after it has been driven into a hard stop, and one that
     // otherwise makes every later move silently do nothing.
-    _bus.write8(ST3215_SERVO_ID, ST_REG_TORQUE_ENABLE, 0);
+    _bus.write8(_id, ST_REG_TORQUE_ENABLE, 0);
     delay(20);
-    _bus.write8(ST3215_SERVO_ID, ST_REG_TORQUE_ENABLE, 1);
+    _bus.write8(_id, ST_REG_TORQUE_ENABLE, 1);
     _torque = true;
     _lastStopMethod = "torque cycle";
 
@@ -565,21 +569,21 @@ void ST3215LinearDriver::update() {
 // -----------------------------------------------------------------------------
 float ST3215LinearDriver::volts() {
     uint8_t v = 0;
-    if (!_online || !_bus.read8(ST3215_SERVO_ID, ST_REG_PRESENT_VOLTAGE, &v)) return 0.0f;
+    if (!_online || !_bus.read8(_id, ST_REG_PRESENT_VOLTAGE, &v)) return 0.0f;
     return v / 10.0f;
 }
 
 int ST3215LinearDriver::tempC() {
     uint8_t t = 0;
-    if (!_online || !_bus.read8(ST3215_SERVO_ID, ST_REG_PRESENT_TEMP, &t)) return -1;
+    if (!_online || !_bus.read8(_id, ST_REG_PRESENT_TEMP, &t)) return -1;
     return (int)t;
 }
 
 int ST3215LinearDriver::load() {
     uint16_t raw = 0;
-    if (!_online || !_bus.read16(ST3215_SERVO_ID, ST_REG_PRESENT_LOAD, &raw)) return 0;
-    int mag = raw & 0x7FFF;
-    return (raw & 0x8000) ? -mag : mag;   // sign-magnitude, not two's complement
+    if (!_online || !_bus.read16(_id, ST_REG_PRESENT_LOAD, &raw)) return 0;
+    int mag = raw & 0x03FF;
+    return (raw & 0x0400) ? -mag : mag;   // bit 10 is the direction, 0..1000 the magnitude (the bench's signedLoad)
 }
 
 // -----------------------------------------------------------------------------
@@ -589,11 +593,11 @@ void ST3215LinearDriver::printDriverRegs() {
         return;
     }
     uint8_t mode = 255, torque = 255;
-    _bus.read8(ST3215_SERVO_ID, ST_REG_MODE, &mode);
-    _bus.read8(ST3215_SERVO_ID, ST_REG_TORQUE_ENABLE, &torque);
+    _bus.read8(_id, ST_REG_MODE, &mode);
+    _bus.read8(_id, ST_REG_TORQUE_ENABLE, &torque);
 
     Serial.println(F("=== ST3215 ==="));
-    Serial.print(F("  id/baud:      ")); Serial.print(ST3215_SERVO_ID);
+    Serial.print(F("  id/baud:      ")); Serial.print(_id);
     Serial.print(F(" @ "));              Serial.println(_bus.baud());
     // Mode is on this line because a mode left over from an experiment is the
     // state that silently decides whether a goal does anything at all.

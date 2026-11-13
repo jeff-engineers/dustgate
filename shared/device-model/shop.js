@@ -208,6 +208,8 @@ function validateShop(shop) {
       err('shape', `failsafe closeAfterMs must be whole milliseconds, ${NL.MIN_FAILSAFE_CLOSE_MS}–${NL.MAX_FAILSAFE_CLOSE_MS}`);
     }
   }
+  // Developer mode (2026-11-01, jeff: a shop setting, not a phone's): shows numbers and controls a woodworker never needs.
+  if (shop.devMode !== undefined && typeof shop.devMode !== 'boolean') err('shape', 'devMode must be true or false');
   if (errors.length) return { ok: false, errors };
 
   if (shop.systems.length === 0) err('system', 'a shop needs at least one system');
@@ -465,13 +467,57 @@ function validateShop(shop) {
 
   // ── each system, as a topology ──
   for (const sys of shop.systems) {
-    const res = T.validateTopology(systemView(shop, sys));
+    const res = T.validateTopology(systemView(shop, sys), { partOfShop: true });
     for (const e of (res.errors || [])) {
       errors.push({ ...e, message: `system "${sys.id}": ${e.message}`, ref: e.ref });
     }
   }
 
+  // ── bus servos, across systems (2026-11-01) ──
+  // A bus board may serve gates in more than one system, so its budget, its chains and the shop-wide servo numbers are
+  // checked here; each system checks only its own half.
+  const gateOwner = new Map();   // selector id → its board
+  const busOwner = new Map();    // servo number → { id, sys } — a clash inside one system is that system's error already
+  const perBoard = new Map();    // board → servos on it
+  for (const sys of shop.systems) {
+    for (const e of sys.elements) {
+      if (!e || e.type !== 'selector') continue;
+      gateOwner.set(e.id, e.controllerId);
+      const n = ((e.kind === 'linear' ? e.linear : e.servo) || {}).bus;
+      if (n !== undefined) {
+        const o = busOwner.get(n);
+        if (o && o.sys !== sys.id) err('selector', `bus servo ${n} is already "${o.id}"`, e.id);
+        else if (!o) busOwner.set(n, { id: e.id, sys: sys.id });
+      }
+      perBoard.set(e.controllerId, (perBoard.get(e.controllerId) || 0) + 1);
+    }
+  }
+  for (const c of shop.controllers) {
+    if ((c.drives || 'servo') !== 'bus') continue;
+    const n = perBoard.get(c.id) || 0;
+    if (n > T.MAX_BUS_SERVOS_PER_HOST) err('controller', `board "${c.name || c.id}" drives ${n} servos (max ${T.MAX_BUS_SERVOS_PER_HOST} per bus board)`, c.id);
+    for (const ch of Array.isArray(c.chains) ? c.chains : []) for (const id of Array.isArray(ch) ? ch : []) {
+      if (!gateOwner.has(id)) err('controller', `board "${c.name || c.id}" chain names "${id}", which is not a gate`, c.id);
+    }
+  }
+
   return { ok: errors.length === 0, errors };
+}
+
+/**
+ * The next free bus servo number in the shop (2026-11-01): the lowest MIN_BUS_ID..MAX_BUS_ID no gate holds and no board
+ * reports answering (`answering`, numbers seen on a scan or in a BUS report). null when all are taken. The app gives it to
+ * "Add a servo"; the board refuses it if something already answers to it, so a number in use elsewhere is never reused.
+ */
+function nextBusId(shop, answering = []) {
+  const taken = new Set(answering);
+  for (const sys of systemsOf(shop)) for (const e of sys.elements || []) {
+    if (!e || e.type !== 'selector') continue;
+    const n = ((e.kind === 'linear' ? e.linear : e.servo) || {}).bus;
+    if (n !== undefined) taken.add(n);
+  }
+  for (let n = T.MIN_BUS_ID; n <= T.MAX_BUS_ID; n++) if (!taken.has(n)) return n;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -756,7 +802,7 @@ function isOptionalBoard(shop, controllerId) {
 }
 
 module.exports = {
-  SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS, servoPulseRange, SERVO_PULSE_BOUNDS, failsafeCloseMs, FAILSAFE_BOUNDS, isOptionalBoard,
+  SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS, nextBusId, servoPulseRange, SERVO_PULSE_BOUNDS, failsafeCloseMs, FAILSAFE_BOUNDS, isOptionalBoard,
   systemView, systemsOf, machinesOf, machineIndex, portsByMachine, plugOwners, portEnabled,
   validateShop, routeShop, planShopTransition,
 };

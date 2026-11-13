@@ -97,10 +97,22 @@
 //     that line as a typo — but the bench console can `swap` at runtime, so it
 //     costs a command to find out rather than a reflash.
 //
-// ⚠️ The bus LOGIC LEVEL is still unconfirmed (3.3V vs 5V) and the C5 is NOT 5V
-// tolerant. That is moot through the adapter, which buffers, and it matters the
-// moment a servo lead meets one of these pads directly.
-// See docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops.
+// THE DRIVER BOARD, from Seeed's schematic (v1.0, 2025-02-25:
+// files.seeedstudio.com/wiki/bus_servo_driver_board/202004237_Servo_Driver_Board_for_Seeed_Studio_XIAO_SCH_PDF_250225.pdf;
+// its GPIO numbers are the XIAO ESP32-S3's, 43/44 — same pads, D6/D7):
+//   - It uses only D6, D7, 5V, GND and 3V3. No direction pin: D6 going low turns
+//     on a PNP (Q1) that enables the line driver (U4, '126), and while it is on
+//     the receive buffer (U5, '125) is off, so with this board we never hear our
+//     own bytes. 10k pull-ups hold D6/D7 idle-high.
+//   - Both buffers run off the XIAO's own 3V3, so these pads only ever see 3.3 V.
+//     A servo lead wired straight to a pad has no such protection — don't.
+//   - Its buck (TPS54302) feeds the XIAO's 5V pin through a Schottky, so USB into
+//     the XIAO while the board is powered is safe. The servos get VIN raw.
+//   - JP1/JP2 tie the board's own USB-serial (CH343) to D7/D6, for a PC to drive
+//     the servos with no XIAO fitted. The CH343 is powered whenever the XIAO is,
+//     so a bridged JP2 fights D6: both must be OPEN on a DustGate board.
+//   - J2/J3 are unfitted header footprints carrying every other pad (D0-D5, D8-
+//     D10, 5V, GND, 3V3) — the endstops and the screen come off those.
 #define PIN_SERVO_BUS_TX   11   // D6, the pad the XIAO silkscreen calls TX
 #define PIN_SERVO_BUS_RX   12   // D7, ditto RX
 
@@ -128,6 +140,7 @@
 // HOME vs MAX is a WIRING label, not a role. Which switch is the datum is
 // g_homeIsMaxEndstop, decided at setup by the one wizard question ("did it home
 // to the left?"), because home is always the user's LEFT.
+// On the driver board D8/D9 are J2 pins 6/5 (unfitted; solder a header).
 #define PIN_ENDSTOP_HOME    8   // D8, NC to GND, INPUT_PULLUP
 #define PIN_ENDSTOP_MAX     9   // D9, ditto
 

@@ -24,8 +24,8 @@
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio run -e xiao_c5_bus_bench -t upload
 //     PLATFORMIO_CORE_DIR=~/.platformio-pioarduino pio device monitor -e xiao_c5_bus_bench
 //
-// ⚠️ Read docs/archive/WIRING.md#7-the-slider--st3215-bus-and-endstops before connecting the signal wire.
-// The bus logic level is unconfirmed and this part is not 5V tolerant.
+// ⚠️ Through Seeed's Bus Servo Driver Board only: it buffers the bus at 3.3 V (boards/xiao_c5.h,
+// "THE DRIVER BOARD"). This part is not 5V tolerant, so never wire a servo lead straight to a pad.
 // =============================================================================
 
 #include <Arduino.h>
@@ -66,8 +66,20 @@ static void banner() {
     Serial.println(F("  type `help`"));
 }
 
+// Printed in small pieces with a flush between: the USB serial port dropped the tail of the whole help in one print once
+// it grew past its buffer (bench 2026-11-01, cut off mid-word after `setid`).
+static void printSlowly(const char* s) {
+    const size_t n = strlen(s);
+    for (size_t at = 0; at < n; at += 128) {
+        Serial.write(reinterpret_cast<const uint8_t*>(s) + at, min((size_t)128, n - at));
+        Serial.flush();
+        delay(2);
+    }
+    Serial.println();
+}
+
 static void help() {
-    Serial.println(F(
+    printSlowly(
         "\n"
         "  scan [hi]        ping every id from 0 to hi (default 20)\n"
         "  sweep [hi]       scan at every plausible baud, both pin orders, and stay on what works\n"
@@ -99,10 +111,17 @@ static void help() {
         "\n"
         "  suite            run every check, print PASS/FAIL and a baseline. THE SHAFT TURNS.\n"
         "\n"
+        "  home             go to the servo's centre (2048); a valve's encoder is absolute, no sweep needed\n"
+        "  sethome          make where the shaft is NOW the servo's centre (saved in it; checks it took)\n"
+        "  setid <n>        renumber the servo (saved in it); refuses a number already answering\n"
+        "  servobaud <rate> change the SERVO's own baud (saved in it), then reopen the bus at it\n"
+        "  cycle <a> <b> [n] [spd]  swing a..b n times (default 5): peak load, current, volts per move. TURNS.\n"
+        "  linktest [n] [work]      n reads (default 1000), counting failures; `work` swings the servo meanwhile\n"
+        "\n"
         "  w8 <addr> <v>    poke a byte    (careful: EEPROM writes below 40 persist)\n"
         "  w16 <addr> <v>   poke a word\n"
         "  endian lo|hi     16-bit byte order, if the numbers come back nonsense\n"
-        "  trace on|off     every frame in both directions, as hex\n"));
+        "  trace on|off     every frame in both directions, as hex\n");
 }
 
 static void fail(const char* what) {
@@ -702,6 +721,175 @@ static void doDump(uint8_t addr, uint8_t len) {
     Serial.println();
 }
 
+// -----------------------------------------------------------------------------
+// HOW HARD IS THE GATE, AND HOW FAR CAN THE WIRE GO (2026-10-29)
+//
+// Two questions the bus-servo chain design waits on (docs/mockups/bus-chain.html):
+//   cycle    swing between two positions and report the PEAK load, current and voltage sag of each move. On a printed
+//            gate this says how much servo it actually needs: a peak well under a third of this servo's torque means a
+//            smaller (lower-current) bus servo will do, and less current is what lets the wire run longer.
+//   linktest count failed reads at the present baud — on a long cable, and optionally WHILE the servo works, because the
+//            motor's current shares the data's ground wire and a stall is when a reply garbles.
+// Both refuse to move a servo whose torque is off or that is not in position mode: a bench sequence sets the state it
+// depends on (firmware/CLAUDE.md), and a leftover mode would read as a gate that "needs no torque".
+// -----------------------------------------------------------------------------
+static bool readyToMove() {
+    uint8_t mode = 255, torque = 0;
+    if (!bus.read8(target, ST_REG_MODE, &mode) || !bus.read8(target, ST_REG_TORQUE_ENABLE, &torque)) { fail("read mode/torque"); return false; }
+    if (mode != 0) { Serial.printf("  mode is %u: `mode 0` (position) first\n", mode); return false; }
+    if (!torque)   { Serial.println(F("  torque is OFF: `torque on` first")); return false; }
+    return true;
+}
+
+struct MoveStats { uint32_t ms = 0; int16_t peakLoad = 0; uint16_t peakCur = 0; uint8_t minVolt = 255; int16_t err = 0; bool arrived = false; uint32_t reads = 0, misses = 0; };
+
+// Command one move and sample it every ~5 ms until it stops (or 6 s).
+static MoveStats sampleMove(uint16_t goal, uint16_t speed) {
+    MoveStats st;
+    uint16_t from = 0;
+    bus.read16(target, ST_REG_PRESENT_POS, &from);
+    if (!bus.moveTo(target, goal, speed)) { fail("move"); return st; }
+    const uint32_t t0 = millis();
+    uint32_t stillSince = 0;
+    // Long enough for the move asked for: a slow speed is steps per second, and a fixed 6 s cut `speed 30` off a third
+    // of the way into every swing (bench 2026-11-01). Twice the distance over the speed, plus 3 s; 6 s at full speed.
+    const uint32_t dist = (uint32_t)abs((int)goal - (int)from);
+    const uint32_t limitMs = speed ? (2000UL * dist / speed + 3000) : 6000;
+    uint16_t lastPos = from;
+    while (millis() - t0 < limitMs) {
+        uint16_t load = 0, cur = 0, pos = 0; uint8_t volt = 0, moving = 1;
+        const bool ok = bus.read16(target, ST_REG_PRESENT_LOAD, &load) && bus.read16(target, ST_REG_PRESENT_POS, &pos) &&
+                        bus.read8(target, ST_REG_MOVING, &moving);
+        bus.read16(target, ST_REG_PRESENT_CURRENT, &cur);
+        bus.read8(target, ST_REG_PRESENT_VOLTAGE, &volt);
+        st.reads++;
+        if (!ok) { st.misses++; delay(5); continue; }
+        lastPos = pos;
+        const int16_t l = signedLoad(load);
+        if (abs(l) > abs(st.peakLoad)) st.peakLoad = l;
+        if (cur > st.peakCur) st.peakCur = cur;
+        if (volt && volt < st.minVolt) st.minVolt = volt;
+        // Stopped is not arrived: a servo too weak to turn (a 5 V supply, 2026-11-01) stops at once, at 100 % load, where it was.
+        if (!moving) { if (!stillSince) stillSince = millis(); if (millis() - stillSince > 60) { st.err = (int16_t)pos - (int16_t)goal; st.arrived = abs(st.err) <= 30; break; } }
+        else stillSince = 0;
+        delay(5);
+    }
+    st.ms = millis() - t0;
+    if (!st.arrived && !stillSince) st.err = (int16_t)lastPos - (int16_t)goal;   // timed out still moving: where it got to
+    return st;
+}
+
+static void doCycle(uint16_t a, uint16_t b, int n, uint16_t speed) {
+    if (!readyToMove()) return;
+    Serial.printf("  cycling id %u between %u and %u, %d times, speed %u (0 = the servo's max)\n", target, a, b, n, speed);
+    int16_t worst = 0; uint16_t worstCur = 0; uint8_t lowV = 255; uint32_t misses = 0, reads = 0;
+    for (int i = 0; i < n * 2; i++) {
+        const uint16_t goal = (i % 2) ? b : a;
+        const MoveStats st = sampleMove(goal, speed);
+        Serial.printf("  -> %4u  %s in %4lums  peak load %+5.1f%%  peak current %4u  min %4.1fV  error %+d counts\n",
+                      goal, st.arrived ? "arrived" : "STOPPED SHORT", (unsigned long)st.ms, st.peakLoad / 10.0f, st.peakCur,
+                      st.minVolt == 255 ? 0.0f : st.minVolt / 10.0f, st.err);
+        if (abs(st.peakLoad) > abs(worst)) worst = st.peakLoad;
+        if (st.peakCur > worstCur) worstCur = st.peakCur;
+        if (st.minVolt < lowV) lowV = st.minVolt;
+        reads += st.reads; misses += st.misses;
+        delay(300);
+    }
+    Serial.printf("  WORST: peak load %.1f%% of this servo's torque, peak current %u (register units), lowest %.1fV, %lu of %lu reads missed\n",
+                  abs(worst) / 10.0f, worstCur, lowV == 255 ? 0.0f : lowV / 10.0f, (unsigned long)misses, (unsigned long)reads);
+    if (lowV != 255 && lowV < 60)
+        Serial.printf("  ⚠ the supply fell to %.1fV — an ST3215 needs 6-12.6V, so these loads say nothing about the gate yet\n", lowV / 10.0f);
+    else Serial.println(F("  A gate peaking well under ~30% could run on a servo with a third of this torque (and current)."));
+}
+
+static void doLinkTest(uint32_t n, bool working) {
+    if (working && !readyToMove()) return;
+    uint16_t here = 0;
+    if (working && !bus.read16(target, ST_REG_PRESENT_POS, &here)) { fail("read position"); return; }
+    const uint16_t a = here > 400 ? here - 300 : here + 300, b = here;
+    Serial.printf("  %lu reads of id %u at %lu baud%s\n", (unsigned long)n, target, (unsigned long)busBaud,
+                  working ? ", the servo swinging 300 counts back and forth meanwhile" : "");
+    uint32_t miss = 0, worstRun = 0, run = 0, lastSwing = 0; bool toA = true;
+    const uint32_t t0 = millis();
+    for (uint32_t i = 0; i < n; i++) {
+        if (working && millis() - lastSwing > 900) { bus.moveTo(target, toA ? a : b, 0); toA = !toA; lastSwing = millis(); }
+        uint16_t pos = 0;
+        if (bus.read16(target, ST_REG_PRESENT_POS, &pos)) run = 0;
+        else { miss++; run++; if (run > worstRun) worstRun = run; }
+        if ((i & 63) == 0) yield();
+    }
+    const uint32_t ms = millis() - t0;
+    if (working) bus.moveTo(target, b, 0);
+    Serial.printf("  %lu of %lu failed (%.2f%%), longest run of failures %lu, %.2f ms a read\n",
+                  (unsigned long)miss, (unsigned long)n, n ? 100.0f * miss / n : 0.0f, (unsigned long)worstRun, n ? (float)ms / n : 0.0f);
+    Serial.println(F("  Record it with the cable length and gauge. Try `baud 250000` / `baud 115200` and run it again."));
+}
+
+// Renumber the servo we are talking to, and change ITS baud — both written to the servo's EEPROM, so they survive a
+// power cycle. Feetech's baud register holds an index, not a rate (ST_REG_BAUD). Each checks the servo answers at the
+// new setting before saying it worked: a servo set to a rate nobody listens at is a servo that seems to have vanished.
+static const uint32_t kServoBauds[] = {1000000, 500000, 250000, 128000, 115200, 76800, 57600, 38400};
+static void doSetId(long v) {
+    if (v < 1 || v > 253) { Serial.println(F("  setid 1..253")); return; }
+    uint8_t err = 0;
+    if (bus.ping((uint8_t)v, &err)) { Serial.printf("  id %ld already answers: two servos with one number garble each other\n", v); return; }
+    // By hand, not writeEeprom8(): that re-locks and reads back at the OLD id, which stops answering the moment the
+    // write lands, so it reports a failure for a renumber that worked. Unlock at the old id, write, lock at the new one.
+    if (!bus.eepromUnlocked(target, true)) { fail("unlock the EEPROM"); return; }
+    delay(5);
+    if (!bus.write8(target, ST_REG_ID, (uint8_t)v)) { bus.eepromUnlocked(target, false); fail("write the id"); return; }
+    delay(30);
+    bus.write8((uint8_t)v, ST_REG_LOCK, 1);
+    delay(5);
+    if (!bus.ping((uint8_t)v, &err)) { Serial.printf("  wrote it, but nothing answers as %ld — `scan` to see where it went\n", v); return; }
+    Serial.printf("  id %u is now id %ld (saved in the servo); talking to %ld\n", target, v, v);
+    target = (uint8_t)v;
+}
+static void doServoBaud(long rate) {
+    int idx = -1;
+    for (int i = 0; i < 8; i++) if ((long)kServoBauds[i] == rate) idx = i;
+    if (idx < 0) { Serial.println(F("  servobaud 1000000|500000|250000|128000|115200|76800|57600|38400")); return; }
+    if (!bus.writeEeprom8(target, ST_REG_BAUD, (uint8_t)idx)) { fail("write the baud"); return; }
+    delay(30);
+    busBaud = (uint32_t)rate;
+    bus.begin(busBaud);
+    uint8_t err = 0;
+    // writeEeprom8 re-locked at the OLD baud, which the servo may already have left: lock it again at the new one.
+    bus.write8(target, ST_REG_LOCK, 1);
+    if (bus.ping(target, &err)) Serial.printf("  id %u now talks at %ld (saved in the servo), and so does the bus\n", target, rate);
+    else Serial.printf("  wrote %ld, but id %u does not answer at it — `sweep` finds it\n", rate, target);
+}
+
+// HOME, for a gate that turns less than a revolution (a ball valve, a manifold). There is no potentiometer: a 12-bit
+// magnetic encoder gives the absolute position within one turn, so at power-up the servo already knows where it is and
+// nothing needs a homing sweep (only the slider's multi-turn mode loses count, which is why it has endstops). What the
+// servo keeps is its CENTRE, position 2048: `home` goes there, and `sethome` makes wherever the shaft is now the new
+// centre — Feetech's "write 128 to the torque register", which stores an offset in the servo's EEPROM. That command is
+// from Feetech's documentation and NOT YET CONFIRMED on our ST3215, so it reads the position back and says what it saw.
+static void doHome() {
+    if (!readyToMove()) return;
+    if (!bus.moveTo(target, 2048, 0)) { fail("move"); return; }
+    Serial.println(F("  going to the servo's centre (2048) — `read` when it stops"));
+}
+static void doSetHome() {
+    uint16_t before = 0, after = 0;
+    if (!bus.read16(target, ST_REG_PRESENT_POS, &before)) { fail("read position"); return; }
+    // NOT writeEeprom8: it reads the register back to verify, and 128 is a command the servo acts on, not a value that
+    // stays — so the check failed every time, even on a servo where it may have worked (bench 2026-11-01). Unlock, send,
+    // re-lock, and judge by the position instead.
+    bus.write8(target, ST_REG_LOCK, 0);
+    delay(5);
+    const bool sent = bus.write8(target, ST_REG_TORQUE_ENABLE, 128);
+    delay(20);
+    bus.write8(target, ST_REG_LOCK, 1);
+    if (!sent) { fail("send the set-centre command"); return; }
+    delay(50);
+    if (!bus.read16(target, ST_REG_PRESENT_POS, &after)) { fail("read position back"); return; }
+    Serial.printf("  was %u, now reads %u — %s\n", before, after,
+                  (after > 2038 && after < 2058) ? "this spot is the servo's centre now (saved in it)"
+                                                 : "NOT 2048: the command did not take on this servo; nothing else changed");
+}
+
 static void doMove(uint16_t pos, long speed) {
     if (pos > ST_POS_MAX) pos = ST_POS_MAX;
     // Speed rides with the position in one write, or it is ignored entirely.
@@ -1065,6 +1253,10 @@ static void handle(const String& line) {
         return;
     }
 
+    if (cmd == "setid")     { doSetId(arg(line,1).toInt()); return; }
+    if (cmd == "home")      { doHome(); return; }
+    if (cmd == "sethome")   { doSetHome(); return; }
+    if (cmd == "servobaud") { doServoBaud(arg(line,1).toInt()); return; }
     if (cmd == "ping") {
         uint8_t err = 0;
         if (!bus.ping(target, &err)) { fail("ping"); return; }
@@ -1111,6 +1303,17 @@ static void handle(const String& line) {
         return;
     }
     if (cmd == "suite")  { doSuite(); return; }
+    if (cmd == "cycle") {
+        if (!arg(line,2).length()) { Serial.println(F("  cycle <a> <b> [n] [speed]")); return; }
+        doCycle((uint16_t)arg(line,1).toInt(), (uint16_t)arg(line,2).toInt(),
+                arg(line,3).length() ? (int)arg(line,3).toInt() : 5, arg(line,4).length() ? (uint16_t)arg(line,4).toInt() : 0);
+        return;
+    }
+    if (cmd == "linktest") {
+        const bool countGiven = arg(line,1).length() && arg(line,1) != "work";
+        doLinkTest(countGiven ? (uint32_t)arg(line,1).toInt() : 1000, arg(line,2) == "work" || arg(line,1) == "work");
+        return;
+    }
     if (cmd == "timeit") {
         if (!arg(line,1).length()) { Serial.println(F("  timeit <pos> [speed]")); return; }
         doTimeIt((uint16_t)arg(line,1).toInt(), arg(line,2).length() ? arg(line,2).toInt() : -1);
@@ -1156,6 +1359,10 @@ void setup() {
 
     bus.begin(busBaud);
     banner();
+    // The supply, said at once: a servo on 5 V answers every read and simply does not turn, which looks like a jam.
+    uint8_t volt = 0;
+    if (bus.read8(target, ST_REG_PRESENT_VOLTAGE, &volt) && volt)
+        Serial.printf("  servo %u sees %.1fV%s\n", target, volt / 10.0f, volt < 60 ? " — BELOW the ST3215's 6 V minimum: it will not turn" : "");
 }
 
 void loop() {
@@ -1168,6 +1375,10 @@ void loop() {
         if (watching) { watching = false; Serial.println(F("  (stopped)")); line = ""; continue; }
         if (c == '\r') continue;
         if (c == '\n') { Serial.printf("> %s\n", line.c_str()); handle(line); line = ""; continue; }
+        // A backspace EDITS the line. It used to be stored as a character, so a corrected `sethome` arrived as "sethome"
+        // plus an invisible DEL, echoed looking right and matched nothing (bench 2026-11-01). Other control bytes dropped.
+        if (c == 0x08 || c == 0x7F) { if (line.length()) line.remove(line.length() - 1); continue; }
+        if ((uint8_t)c < 0x20) continue;
         if (line.length() < 64) line += c;
     }
 

@@ -187,7 +187,7 @@ export interface NodeLinkState {
    *  ABSENT MEANS NONE, which is what every board flashed before 2026-09-15
    *  reports by saying nothing. Read it through `clampsOn()` rather than
    *  directly, so that default lives in one place. */
-  caps: { servos: number; linear: number; ct?: number; rf?: number; bin?: number };
+  caps: { servos: number; bus: number; ct?: number; rf?: number; bin?: number };
   /** Is a clamp plugged into its jack (CLAMP, 2026-10-09)? Absent: not said — old firmware, or not linked. Never read
    *  absent as unplugged. */
   clampIn?: boolean;
@@ -205,7 +205,14 @@ export interface NodeLinkState {
   ota?: 'start' | 'progress' | 'done' | 'fail';
   otaPct?: number;
   otaErr?: string;
+  /** A bus board's servos as last reported (2026-11-01), by number. Absent on a PWM board, or before the first report. */
+  bus?: BusServoState[];
+  /** The link as the board and the brain see it — developer mode's communication losses. */
+  link?: { rssi?: number; drops?: number; lost: number };
 }
+
+export type { BusServoState, ServoReply, ServoOp } from './bus-types';
+import type { BusServoState, ServoReply, ServoOp } from './bus-types';
 
 /** One clamp's live state, from GET /api/nodes.
  *
@@ -939,6 +946,36 @@ export class ApiService {
     return this.checkJog(await this.post<{ ok?: boolean; error?: string }>(
       '/api/servo/jog', { channel, angle, ...(controllerId ? { controllerId } : {}) }));
   }
+  /** Drive a gate's servo to an angle, wherever it is: a bus servo by its number, a PWM one by its channel. */
+  jogGate(sel: { controllerId: string; servo?: { channel?: number; bus?: number } }, angle: number): Promise<unknown> {
+    const bus = sel.servo?.bus;
+    // A gate on a bus board has no channel; until a servo is added for it, it has no number either, and nothing to move.
+    if (bus === undefined && sel.servo?.channel === undefined)
+      return Promise.reject(new JogRefusedError('This gate has no servo yet. Add one from the board\'s menu or the Boards page first.'));
+    return bus !== undefined ? this.jogBus(sel.controllerId, bus, angle) : this.jogServo(sel.servo?.channel ?? 0, angle, sel.controllerId);
+  }
+
+  /** Drive a BUS servo, by its number, to an angle (0-359) — Set positions on a bus valve. */
+  async jogBus(controllerId: string, bus: number, angle: number): Promise<unknown> {
+    return this.checkJog(await this.post<{ ok?: boolean; error?: string }>('/api/servo/jog', { controllerId, bus, angle }));
+  }
+
+  /**
+   * A SERVO order to a bus board — find, assign, wiggle, torque, reset or scan — and its answer. The brain hands it on and
+   * the board answers in its own time (a scan takes seconds), so this asks for the answer until it comes.
+   */
+  async servoOp(controllerId: string, op: ServoOp, args: { bus?: number; to?: number; on?: boolean } = {}): Promise<ServoReply> {
+    const { seq } = await this.post<{ seq: number }>('/api/servo/op', { controllerId, op, ...args });
+    const until = Date.now() + (op === 'scan' ? 20000 : 10000);
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 300));
+      const r = await this.get<{ done: boolean; reply?: ServoReply }>(
+        `/api/servo/reply?controllerId=${encodeURIComponent(controllerId)}&seq=${seq}`);
+      if (r?.done && r.reply) return r.reply;
+    }
+    throw new Error('The board did not answer. Check it is switched on and connected.');
+  }
+
   private checkJog(res: { ok?: boolean; error?: string } | null): unknown {
     if (res && typeof res.error === 'string') throw new JogRefusedError(res.error);
     return res;

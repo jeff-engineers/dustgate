@@ -1,0 +1,534 @@
+<title>Bus Servo Chains</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  /* Layout: the decision and the board up top, then one live phone with six screens and a developer-mode switch, then
+     the questions. Tokens are the app's own (dustgate-ui/src/styles.css), so the phone screens can be judged as the
+     screens they become. Deliberately single-theme: the app is dark. */
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e; --danger: #d94444; --info: #5aa9e6;
+    --warn-bg: #2a2209; --ok-bg: #12261a; --bad-bg: #2a1414; --dev: #8f7ad9; --dev-bg: #1d1830; --radius: 14px;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color-scheme: dark;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0; font-family: var(--sans); font-size: 15px; line-height: 1.5;
+         padding-block: 22px 72px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; text-wrap: balance; }
+  h3 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 70ch; margin-top: 6px; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 16px; min-width: 0; }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .banner { background: var(--warn-bg); border: 1px solid #4a3a0d; border-radius: var(--radius); padding: 13px 15px; font-size: 13px; line-height: 1.55; }
+  .banner b { color: var(--accent); }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .figure { overflow-x: auto; }
+  .num { font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tab { background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  .tab[aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
+  .devswitch { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dev); cursor: pointer; }
+  .devswitch input { accent-color: var(--dev); width: 18px; height: 18px; }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ── the phone ─────────────────────────────────────────────── */
+  .phones { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+  .phone { width: 375px; max-width: 100%; background: var(--bg); border: 1px solid #202225; border-radius: 18px; padding: 14px 13px 18px; flex: none; }
+  .side { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .ph-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; color: var(--muted); margin-bottom: 10px; gap: 8px; }
+  .ph-title { font-size: 15px; font-weight: 600; color: var(--text); }
+  .pcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 11px 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .sub { font-size: 12px; color: var(--muted); }
+  .line { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--success); } .dot.warn { background: var(--accent); } .dot.bad { background: var(--danger); }
+  .svo { display: grid; grid-template-columns: 30px 1fr 74px; gap: 8px; align-items: center; font-size: 12.5px; padding: 6px 0;
+         border-top: 1px solid var(--border); background: none; border-left: 0; border-right: 0; border-bottom: 0; color: inherit;
+         font-family: inherit; text-align: left; cursor: pointer; width: 100%; }
+  .svo .what { min-width: 0; display: flex; flex-direction: column; }
+  .id { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .meter { display: flex; flex-direction: column; gap: 3px; align-items: stretch; }
+  .meter .track { position: relative; height: 6px; border-radius: 3px; background: var(--raised); overflow: hidden; }
+  .meter .fill { position: absolute; inset: 0 auto 0 0; background: var(--success); border-radius: 3px; }
+  .meter .fill.warn { background: var(--accent); } .meter .fill.bad { background: var(--danger); }
+  .meter .usual { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); opacity: 0.6; }
+  .meter .lbl { font-size: 10.5px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .btn { background: var(--raised); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 9px 12px; font: inherit; font-size: 13.5px; cursor: pointer; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 600; }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; }
+  .steps { display: flex; gap: 5px; margin-bottom: 10px; }
+  .steps i { flex: 1; height: 3px; border-radius: 2px; background: var(--border); }
+  .steps i.on { background: var(--accent); }
+  .big { font-size: 15px; font-weight: 600; }
+  .choice { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .choice button { background: var(--raised); border: 1px solid var(--border); color: var(--text); border-radius: 10px; padding: 10px 6px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .choice button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+  .field select, .field input { background: var(--raised); border: 1px solid var(--border); color: var(--text); border-radius: 9px; padding: 8px 9px; font: inherit; font-size: 13.5px; }
+  .callout { font-size: 12.5px; border-radius: 10px; padding: 9px 10px; line-height: 1.5; }
+  .callout.ok { background: var(--ok-bg); } .callout.warn { background: var(--warn-bg); } .callout.bad { background: var(--bad-bg); }
+  .dial { display: flex; align-items: center; gap: 14px; }
+  .gauge { width: 104px; height: 104px; flex: none; }
+  .readout { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .jog { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .spark { width: 100%; height: 64px; display: block; }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; font-size: 12.5px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .kv span:nth-child(even) { font-variant-numeric: tabular-nums; text-align: right; }
+  .dev { border: 1px dashed var(--dev); background: var(--dev-bg); border-radius: 12px; padding: 9px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .dev .tag { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dev); }
+  .dev code { font-family: var(--mono); font-size: 11.5px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; padding: 9px 0; border-top: 1px solid var(--border); }
+  .tool { display: flex; align-items: center; gap: 9px; font-size: 13.5px; padding: 9px 0; border-top: 1px solid var(--border); }
+  .tool .t { flex: 1; min-width: 0; }
+  .q { display: flex; flex-direction: column; gap: 7px; }
+  .q li { margin-left: 18px; font-size: 13.5px; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">DustGate · mockup for review · revised 2026-11-01</div>
+    <h1>Bus servo chains: ball valves, manifolds and sliders on bus servos</h1>
+    <p class="lede">A third way to drive gates, beside hobby PWM servos: several ST3215 bus servos chained off one board,
+      each reporting where it really is and how hard it is working. This page is for deciding the screens before any are
+      built.</p>
+  </header>
+
+  <div class="banner"><b>Decided 2026-11-01:</b> <b>one board per cluster of gates</b> — a XIAO board with a 12 V jack,
+    endstop inputs and <b>up to 6 servos</b> on one or two chains (one each side of the board, wire lengths still to measure), talking to the brain over WiFi like every node. The RS-485 trunk
+    with drop boards was drawn first and dropped: a drop board needed its own chip anyway, so it might as well be the XIAO,
+    and that removes the trunk, the bus board and a second protocol. <b>ST3215 for now</b>; the smaller STS3032 is noted as
+    a good fit for later. The valve measured 2026-11-01 needs about 0.7 kg·cm, a fraction of what the ST3215 gives.
+    <br><b>Beside PWM, not instead of it:</b> the existing board stays as it is, for PWM gates and the collector. The bus
+    board is a second board, and no board does both. CT clamp inputs on the bus board are a maybe for later.</div>
+
+  <section class="sec">
+    <h2>The cluster board</h2>
+    <div class="cols">
+      <div class="card figure">
+        <svg viewBox="0 0 460 220" width="460" height="220" role="img" aria-label="Cluster board: XIAO, 12 V jack, endstops and a short chain of servos">
+          <rect x="6" y="6" width="448" height="208" rx="14" fill="#1a1a1a" stroke="#2e2e2e"/>
+          <rect x="20" y="22" width="120" height="70" rx="8" fill="#262626" stroke="#f0a500"/>
+          <text x="80" y="46" text-anchor="middle" font-size="12" fill="#e8e8e8">XIAO C5</text>
+          <text x="80" y="64" text-anchor="middle" font-size="10" fill="#8a8a86">WiFi to the brain,</text>
+          <text x="80" y="78" text-anchor="middle" font-size="10" fill="#8a8a86">the servo bus, endstops</text>
+          <rect x="160" y="22" width="130" height="70" rx="8" fill="#262626" stroke="#2e2e2e"/>
+          <text x="225" y="46" text-anchor="middle" font-size="12" fill="#e8e8e8">Seeed bus board</text>
+          <text x="225" y="64" text-anchor="middle" font-size="10" fill="#8a8a86">12 V jack, bus driver;</text>
+          <text x="225" y="78" text-anchor="middle" font-size="10" fill="#8a8a86">powers the XIAO</text>
+          <rect x="310" y="22" width="130" height="70" rx="8" fill="#262626" stroke="#2e2e2e"/>
+          <text x="375" y="46" text-anchor="middle" font-size="12" fill="#e8e8e8">Endstops</text>
+          <text x="375" y="64" text-anchor="middle" font-size="10" fill="#8a8a86">home + far, NC,</text>
+          <text x="375" y="78" text-anchor="middle" font-size="10" fill="#8a8a86">for a slider</text>
+          <rect x="20" y="110" width="420" height="44" rx="8" fill="#262626" stroke="#e8e8e8"/>
+          <text x="230" y="137" text-anchor="middle" font-size="12" fill="#e8e8e8">Servo headers (ST3215: GND, 12 V, data) — chain from here</text>
+          <g font-size="10" fill="#f0a500" text-anchor="middle">
+            <circle cx="90" cy="184" r="14" fill="#262626" stroke="#e8e8e8"/><text x="90" y="188">V</text>
+            <circle cx="170" cy="184" r="14" fill="#262626" stroke="#e8e8e8"/><text x="170" y="188">M</text>
+            <circle cx="250" cy="184" r="14" fill="#262626" stroke="#e8e8e8"/><text x="250" y="188">S</text>
+            <text x="350" y="188" fill="#8a8a86">… up to 6</text>
+          </g>
+          <path d="M90 154 V170 M104 184 H156 M184 184 H236 M264 184 H300" stroke="#e8e8e8" stroke-width="1.5" fill="none"/>
+        </svg>
+      </div>
+      <div class="card">
+        <h3>What it costs</h3>
+        <table style="margin-top:6px">
+          <tr><th>Per board, for now</th><th class="num">≈</th></tr>
+          <tr><td>XIAO C5</td><td class="num">$7</td></tr>
+          <tr><td>Seeed Bus Servo Driver Board for XIAO (5–12 V DC jack, servo port, bus on D6/D7)</td><td class="num">$6</td></tr>
+          <tr><td>endstop leads, a screen if wanted</td><td class="num">$1–2</td></tr>
+          <tr><td><b>Board</b></td><td class="num"><b>≈ $14</b></td></tr>
+        </table>
+        <p class="note" style="margin-top:8px"><b>No custom PCB to start (jeff, 2026-11-01).</b> The Seeed board ($5.99 on
+          Seeed's page) drives the bus from the XIAO's D6/D7, which are the pins our slider build already uses. When a custom
+          carrier comes, the Seeed board sockets into it, and the carrier adds the endstops, screen and other headers the PWM
+          board has. Plus per servo (ST3215 ~$22–25) and a 12 V brick per board. One move at a time per board stays the rule:
+          the servos share that board's brick.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>In the app</h2>
+    <div class="bar">
+      <div class="tabs" role="tablist" aria-label="Screens">
+        <button class="tab" role="tab" aria-selected="true" data-s="boards">Boards</button>
+        <button class="tab" role="tab" aria-selected="false" data-s="servo">A servo</button>
+        <button class="tab" role="tab" aria-selected="false" data-s="number">Add a servo</button>
+        <button class="tab" role="tab" aria-selected="false" data-s="valve">Set up a valve</button>
+        <button class="tab" role="tab" aria-selected="false" data-s="live">Live</button>
+        <button class="tab" role="tab" aria-selected="false" data-s="settings">Settings</button>
+      </div>
+      <label class="devswitch" for="devmode"><input type="checkbox" id="devmode"> Developer mode</label>
+    </div>
+    <div class="phones">
+      <div class="phone" id="phone"></div>
+      <div class="side" id="side"></div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>On the shop layout</h2>
+    <div class="cols">
+      <div class="card figure" style="grid-column: 1 / -1">
+        <svg viewBox="0 0 680 300" style="width:100%;max-width:680px;height:auto;display:block" role="img" aria-label="A bus board with two chains of servo cables running to four gates on one duct">
+          <style>
+            .c-duct { fill: none; stroke: #3a3a3a; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
+            .c-cable { fill: none; stroke: #38b6f0; stroke-width: 2.4; stroke-linejoin: round; }
+            .c-new { fill: none; stroke: #38b6f0; stroke-width: 2.4; stroke-dasharray: 6 5; }
+            .c-box { fill: #16262e; stroke: #2d6a86; stroke-width: 2; }
+            .c-unit { fill: #1e1e1e; stroke: #444; stroke-width: 1.6; }
+            .c-gate { fill: #262626; stroke: #e8e8e8; stroke-width: 1.6; }
+            .c-tab { fill: #1e1e1e; stroke: #38b6f0; stroke-width: 1.4; }
+            .c-port { fill: #1d3540; stroke: #38b6f0; stroke-width: 1.4; }
+            .c-lbl { fill: #e8e8e8; font-size: 11.5px; text-anchor: middle; font-family: system-ui, sans-serif; font-weight: 500; }
+            .c-sub { fill: #8a8a86; font-size: 9.5px; text-anchor: middle; font-family: system-ui, sans-serif; }
+            .c-acc { fill: #f0a500; font-size: 9.5px; text-anchor: middle; font-family: system-ui, sans-serif; }
+          </style>
+          <!-- collector and trunk -->
+          <rect class="c-unit" x="14" y="128" width="64" height="44" rx="8"/><text class="c-lbl" x="46" y="154">Cyclone</text>
+          <path class="c-duct" d="M78 150 H640"/>
+          <!-- drops to machines -->
+          <path class="c-duct" d="M180 150 V224 M300 150 V224 M470 150 V224 M590 150 V224"/>
+          <rect class="c-box" x="140" y="224" width="80" height="34" rx="6"/><text class="c-lbl" x="180" y="245">Bandsaw</text>
+          <rect class="c-box" x="260" y="224" width="80" height="34" rx="6"/><text class="c-lbl" x="300" y="245">Drum sander</text>
+          <rect class="c-box" x="430" y="224" width="80" height="34" rx="6"/><text class="c-lbl" x="470" y="245">Router</text>
+          <rect class="c-box" x="550" y="224" width="80" height="34" rx="6"/><text class="c-lbl" x="590" y="245">Jointer</text>
+          <!-- gates with their cable tabs -->
+          <g>
+            <circle class="c-gate" cx="180" cy="150" r="10"/><rect class="c-tab" x="174" y="122" width="12" height="9" rx="2"/>
+            <circle class="c-gate" cx="300" cy="150" r="10"/><rect class="c-tab" x="294" y="122" width="12" height="9" rx="2"/>
+            <circle class="c-gate" cx="470" cy="150" r="10"/><rect class="c-tab" x="464" y="122" width="12" height="9" rx="2"/>
+            <circle class="c-gate" cx="590" cy="150" r="10"/><rect class="c-tab" x="584" y="122" width="12" height="9" rx="2"/>
+          </g>
+          <!-- the bus board: its own cell, two chain ports -->
+          <rect class="c-unit" x="335" y="22" width="110" height="58" rx="8"/>
+          <text class="c-lbl" x="390" y="42">Manifold wall</text><text class="c-sub" x="390" y="56">bus servos · 4 of 6</text>
+          <rect class="c-port" x="352" y="72" width="22" height="12" rx="3"/><text class="c-sub" x="363" y="98">1</text>
+          <rect class="c-port" x="406" y="72" width="22" height="12" rx="3"/><text class="c-sub" x="417" y="98">2</text>
+          <!-- chain 1: board → drum sander → bandsaw ; chain 2: board → router → jointer -->
+          <path class="c-cable" d="M363 84 V108 H300 V122 M300 108 H180 V122"/>
+          <path class="c-cable" d="M417 84 V108 H470 V122 M470 108 H590 V122"/>
+          <circle cx="300" cy="108" r="3" fill="#38b6f0"/><circle cx="470" cy="108" r="3" fill="#38b6f0"/>
+          <text class="c-acc" x="240" y="102">chain 1</text><text class="c-acc" x="530" y="102">chain 2</text>
+        </svg>
+      </div>
+      <div class="card">
+        <h3>Drawn as it's wired <span class="sub" style="color:var(--success)">· decided 2026-11-01</span></h3>
+        <p class="note" style="margin-top:6px">The cable is drawn the way the wire really runs: from one of the board's
+          two chain ports to the nearest gate, then on to the next. A dot where the cable carries on is that servo's second
+          socket. It's a drawing of a wire someone has to run, like the clamp lead, so a long one tells you to move the
+          board, and the chain order is what the wire-length limit will be checked against once we've measured it.</p>
+      </div>
+      <div class="card">
+        <h3>Wiring a gate to it</h3>
+        <p class="note" style="margin-top:6px">Hold a gate's tab and drag it to a chain port, or onto the last gate of
+          a chain to extend it. The board takes up to 6 servos across both chains. A 7th is refused with the reason:
+          <b>"This board drives 6 servos already. Put this gate on another bus board."</b> The board still moves <b>one servo at a time</b>, like every board: they share its brick, and the
+          wire-length limit counts on only the moving one drawing heavy current. A PWM gate dropped here, or a
+          bus gate on a PWM board, is refused the same way the slider port is today.</p>
+      </div>
+      <div class="card">
+        <h3>A slider on a bus board</h3>
+        <p class="note" style="margin-top:6px">It sits on a chain like any servo and also uses the board's two endstop
+          inputs, so a board takes one slider. Its tab says <b>endstops</b> under it, and a second slider is refused:
+          <b>"This board's endstops are used by the Planer slider."</b></p>
+      </div>
+      <div class="card">
+        <h3>The board picks the servo, not the drawing</h3>
+        <p class="note" style="margin-top:6px">Wiring a gate on the canvas says which board drives it. Which servo
+          drives it is settled by <b>Add a servo</b> (plug it in, the board finds it), so the canvas never asks for a number.
+          A gate wired on the canvas but with no servo yet shows its tab hollow, with "no servo yet" under it.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>Open questions</h2>
+    <div class="card">
+      <ol class="q" style="margin:0; padding:0">
+        <li><b>Decided 2026-11-01: "working harder than usual" is logged, not raised, until we have real numbers.</b> Every
+          move's peak load goes to the brain log and the servo's history; no warning, no amber. The threshold gets picked from
+          shop data. A move that stalls (it stops short of where it was sent) is still red, as a failed move is today.</li>
+        <li><b>Decided 2026-11-01: developer mode is a shop setting.</b> One switch in Settings, saved on the brain, so every
+          phone and browser in the shop sees the same thing.</li>
+        <li><b>Decided 2026-11-01: one slider per bus board</b>, so two endstop inputs. A second slider goes on another board.</li>
+        <li><b>Decided 2026-11-01: servo numbers are shop-wide, and number 1 means "not yet assigned".</b> The brain hands
+          out 2–253, each used once in the shop and tied to its gate in the layout. A factory-fresh servo answers as 1, so it
+          is always "new". A numbered servo that turns up on a different board can't clash: the app says whose servo it is
+          and where it is now, and offers to keep it there. A servo with a number the layout doesn't know (from another
+          project) is offered a reset to 1.</li>
+        <li><b>The PWM pulse range moves into developer mode.</b> With the new manifold inside 180° it should rarely be needed,
+          and keeping it out of sight stops it being changed by accident.</li>
+      </ol>
+    </div>
+  </section>
+</div>
+
+<script>
+const S = { screen: 'boards', dev: false,
+  wiz: { step: 0, gate: 'Bandsaw valve', kind: 'valve', problem: '', replace: false, num: 5 },
+  valve: { deg: 92, open: null, closed: null },
+  servo: { id: 3 } };
+const phone = document.getElementById('phone'), side = document.getElementById('side');
+
+// The example shop. Load is % of the servo's drive at its last move's peak; usual is its learned normal.
+const SERVOS = [
+  { id: 2, name: 'Slider', kind: 'slider', where: 'port 3 of 6', last: 18, usual: 17, v: 12.1, t: 29, extra: 'home ✓ far ✓' },
+  { id: 3, name: 'Router/jointer manifold', kind: 'manifold', where: 'left', last: 34, usual: 15, v: 12.0, t: 31, extra: '' },
+  { id: 4, name: 'Drum sander valve', kind: 'valve', where: 'closed', last: 14, usual: 13, v: 12.1, t: 27, extra: '' },
+];
+const HISTORY = { 2: [16,17,18,17,16,18,17,17,18,16,17,18,17,18,17,16,17,18,17,18], 3: [14,15,15,16,14,15,15,16,15,14,16,15,15,17,19,22,25,28,31,34],
+                  4: [12,13,13,14,13,12,13,14,13,13,12,13,14,13,13,12,13,14,13,14] };
+const kindName = (k) => k === 'valve' ? 'ball valve' : k;
+// Logged only (2026-11-01): no threshold until real shop numbers exist, so nothing is ever drawn as "harder".
+const harder = () => false;
+
+function meter(s) {
+  const cls = harder(s) ? 'warn' : '';
+  return `<div class="meter" title="Peak load on its last move, against its usual (the white tick)">
+    <div class="track"><div class="fill ${cls}" style="width:${s.last}%"></div><div class="usual" style="left:${s.usual}%"></div></div>
+    <div class="lbl">${s.last}%${S.dev ? ` · usual ${s.usual}` : ''}</div></div>`;
+}
+
+function boards() {
+  return `
+  <div class="ph-head"><span class="ph-title">Your boards</span><span>3 boards</span></div>
+  <div class="pcard">
+    <div class="line"><span class="dot ok"></span><b>Manifold wall</b><span class="sub" style="margin-left:auto">bus servos</span></div>
+    <div class="sub">dustgate-manifold · 3 of 6 servos · 12 V supply reads 12.1 V${S.dev ? ' · fw 47fa3e1 · bus 1 Mbit/s' : ''}</div>
+    ${S.dev ? `<div class="dev"><span class="tag">Developer · communication, last 24 h</span>
+      <div class="kv"><span>Brain link drops</span><span>2 (longest 4 s)</span><span>Messages lost</span><span>3 of 51 840</span>
+        <span>WiFi signal</span><span>−61 dBm</span><span>Servo reads missed</span><span>7 of 98 400 · 6 on the slider</span></div></div>` : ''}
+    ${SERVOS.map((s) => `<button class="svo" data-servo="${s.id}">
+      ${S.dev ? `<span class="id">#${s.id}</span>` : `<span class="dot ok" style="margin-left:6px"></span>`}
+      <span class="what"><span>${s.name}</span><span class="sub">${kindName(s.kind)} · ${s.where}${s.extra ? ' · ' + s.extra : ''}</span></span>
+      ${meter(s)}</button>`).join('')}
+    <div class="btns"><button class="btn primary" data-go="number">Add a servo</button><button class="btn">Rename</button></div>
+  </div>
+  <div class="pcard">
+    <div class="line"><span class="dot ok"></span><b>Miter saw gate</b><span class="sub" style="margin-left:auto">PWM servos</span></div>
+    <div class="sub">dustgate-mitersaw · 1 of 2 gates</div>
+    ${S.dev ? `<div class="dev"><span class="tag">Developer · communication, last 24 h</span>
+      <div class="kv"><span>Brain link drops</span><span>0</span><span>Messages lost</span><span>0 of 51 840</span><span>WiFi signal</span><span>−54 dBm</span></div></div>` : ''}
+  </div>`;
+}
+function boardsSide() {
+  return `<div class="card"><h3>Load is on every servo, at a glance</h3><p class="note" style="margin-top:6px">The bar is
+    the peak load of that servo's <b>last move</b>; the white tick is its <b>usual</b>. Here the manifold has crept from 15%
+    to 34% over its last moves (sawdust in the bearings, a duct pulling on it), which you can see, but nothing warns yet:
+    load is logged until real numbers pick a threshold. Tap a servo for its history and controls.</p></div>
+    <div class="card"><h3>Developer mode shows communication losses</h3><p class="note" style="margin-top:6px">Every
+    board, PWM or bus: how often it lost the brain and for how long, messages lost, WiFi signal. A bus board adds servo
+    reads missed, and which servo they were on — a bad cable shows up as one servo's count climbing.</p></div>
+    <div class="card"><h3>No servo numbers, unless you ask</h3><p class="note" style="margin-top:6px">Each servo is listed by
+    the gate it drives. Its bus number exists, but only developer mode shows it, with firmware, bus speed and the usual
+    load in figures. Flip the switch above the phone.</p></div>`;
+}
+
+function servo() {
+  const s = SERVOS.find((x) => x.id === S.servo.id) || SERVOS[1];
+  const hist = HISTORY[s.id];
+  const W = 320, H = 64, max = 50;
+  const pts = hist.map((v, i) => `${(i / (hist.length - 1) * (W - 8) + 4).toFixed(1)},${(H - 6 - v / max * (H - 12)).toFixed(1)}`).join(' ');
+  const usualY = (H - 6 - s.usual / max * (H - 12)).toFixed(1);
+  const last = pts.split(' ').pop().split(',');
+  return `<div class="ph-head"><span class="ph-title">${s.name}</span><span>${S.dev ? `servo #${s.id} · ` : ''}Manifold wall</span></div>
+    ${harder(s) ? `<div class="callout warn" style="margin-bottom:10px"><b>Working harder than usual.</b> Its last move peaked at
+      ${s.last}%; it usually needs about ${s.usual}%. Check for sawdust in the valve and that the duct isn't pulling on it.</div>` : ''}
+    <div class="pcard">
+      <div class="line"><b>Load, last 20 moves</b><span class="sub" style="margin-left:auto">peak of each move</span></div>
+      <svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Peak load per move">
+        <line x1="4" x2="${W - 4}" y1="${usualY}" y2="${usualY}" stroke="#e8e8e8" stroke-opacity="0.35" stroke-dasharray="4 4"/>
+        <polyline points="${pts}" fill="none" stroke="${harder(s) ? '#f0a500' : '#3cbe6e'}" stroke-width="2"/>
+        <circle cx="${last[0]}" cy="${last[1]}" r="3.5" fill="${harder(s) ? '#f0a500' : '#3cbe6e'}"/>
+      </svg>
+      <div class="kv"><span>Last move</span><span>${s.last}%</span><span>Usual</span><span>${s.usual}%</span>
+        <span>Position</span><span>${s.where}</span><span>Supply at the servo</span><span>${s.v} V</span><span>Temperature</span><span>${s.t} °C</span></div>
+    </div>
+    <div class="pcard">
+      <div class="btns"><button class="btn">Find it</button><button class="btn">Test move</button><button class="btn" data-go="valve">Set positions</button>
+        <button class="btn" data-act="replace">Replace this servo</button></div>
+      <p class="sub"><b>Find it</b> wiggles it, so you can tell which one this is. <b>Test move</b> swings it through its positions and back.
+        <b>Replace</b> walks you through swapping in a new servo for this gate.</p>
+    </div>
+    ${S.dev ? `<div class="dev"><span class="tag">Developer</span>
+      <div class="kv"><span>Raw position</span><span>3102 counts</span><span>Load now</span><span>2.1% (moving: no)</span>
+        <span>Current</span><span>4 units</span><span>Mode</span><span>0 · position</span><span>Bus id · speed</span><span>#${s.id} · 1 Mbit/s</span>
+        <span>Missed reads (1 h)</span><span>0 of 4 312</span><span>Missed reads (24 h)</span><span>1 of 32 800</span></div>
+      <div class="btns"><button class="btn">Relax (torque off)</button><button class="btn">Set centre here</button><button class="btn">Registers</button></div>
+    </div>` : ''}`;
+}
+function servoSide() {
+  return `<div class="card"><h3>The history is the point</h3><p class="note" style="margin-top:6px">One number tells you
+    little; a line creeping up tells you a gate is getting harder to move long before it jams. The dashed line is its usual.
+    The other servos are flat: tap the drum sander valve on Boards to compare.</p></div>
+    <div class="card"><h3>Everyday controls, and the rest in developer mode</h3><p class="note" style="margin-top:6px"><b>Find it</b>,
+    <b>Test move</b>, <b>Set positions</b> and <b>Replace</b> for everyone. Relax, set-centre and the raw registers only
+    in developer mode — each can leave a gate somewhere it shouldn't be.</p></div>`;
+}
+
+// Gates on the canvas that this board could drive and nothing drives yet.
+const UNDRIVEN = [{ name: 'Bandsaw valve', kind: 'valve' }, { name: 'Table saw manifold', kind: 'manifold' }];
+function number() {
+  const w = S.wiz;
+  const steps = `<div class="steps">${[0,1,2].map((i) => `<i class="${i <= w.step ? 'on' : ''}"></i>`).join('')}</div>`;
+  const title = w.replace ? `Replace the ${w.gate}'s servo` : 'Add a servo';
+  const head = `<div class="ph-head"><span class="ph-title">${title}</span><span>Manifold wall</span></div>${steps}`;
+  if (w.step === 0) return head + `<div class="pcard"><div class="big">Which gate is it for?</div>
+      ${UNDRIVEN.map((g) => `<button class="row" data-gate="${g.name}" data-kind="${g.kind}" aria-pressed="${w.gate === g.name}"
+          style="background:none;border-left:0;border-right:0;border-bottom:0;color:inherit;font:inherit;cursor:pointer;width:100%">
+          <span>${g.name}<br><span class="sub">${kindName(g.kind)} on the canvas, nothing driving it yet</span></span>
+          <span style="color:var(--accent)">${w.gate === g.name ? '●' : '○'}</span></button>`).join('')}
+      <button class="row" data-gate="new" aria-pressed="${w.gate === 'new'}"
+          style="background:none;border-left:0;border-right:0;border-bottom:0;color:inherit;font:inherit;cursor:pointer;width:100%">
+          <span>A gate not on the canvas yet</span><span style="color:var(--accent)">${w.gate === 'new' ? '●' : '○'}</span></button>
+      ${w.gate === 'new' ? `<div class="choice">${['valve','manifold','slider'].map((k) => `<button aria-pressed="${w.kind === k}" data-kind="${k}">${k === 'valve' ? 'Ball valve' : k === 'manifold' ? 'Manifold' : 'Slider'}</button>`).join('')}</div>` : ''}
+      ${w.kind === 'slider' ? `<p class="sub">A slider also needs its two endstops plugged into this board's endstop sockets.</p>` : ''}
+      <div class="btns"><button class="btn primary" data-act="pick">Next</button></div></div>`;
+  if (w.step === 1 && w.problem) return head + `<div class="pcard">${w.problem === 'two'
+      ? `<div class="callout bad"><b>Two new servos are plugged in.</b> Only one can be added at a time. Unplug all but one and look again.</div>`
+      : `<div class="callout warn"><b>No new servo answered.</b> Check it is plugged into this board's chain and that the board's 12 V is on.</div>`}
+      <div class="btns"><button class="btn primary" data-act="look">Look again</button><button class="btn" data-act="restart">Back</button></div></div>`;
+  if (w.step === 1) return head + `<div class="pcard"><div class="big">${w.replace
+        ? `Unplug the old servo and plug the new one into its cable`
+        : `Plug in its servo, and only that one`}</div>
+      <p class="sub">${w.replace ? 'Leave every other servo plugged in.' : 'Leave the servos already working where they are. Add new ones one at a time.'}</p>
+      <div class="btns"><button class="btn primary" data-act="look">It's plugged in — find it</button></div>
+      <div class="btns"><button class="btn" data-act="two">(mockup) two new ones</button><button class="btn" data-act="none">(mockup) nothing found</button></div></div>`;
+  const gate = w.gate === 'new' ? `new ${kindName(w.kind)}` : w.gate;
+  return head + `<div class="pcard"><div class="callout ok"><b>Found it</b> — it turned a little so you can see which one.
+        It now drives the <b>${gate}</b>, and remembers that if it's unplugged.</div>
+      <p class="sub">${w.replace ? 'A new servo sits on its shaft a little differently, so set the gate\'s positions again.'
+        : w.gate === 'new' ? 'It waits on the canvas, ready to put on a duct. Then set its positions.' : 'Next, set its open and closed positions.'}</p>
+      ${S.dev ? `<div class="dev"><span class="tag">Developer</span><span class="sub">Found at bus #1 (not yet assigned), given bus #${w.num},
+        the next free number in the shop. ${w.replace ? 'The old servo\'s number is freed.' : ''}</span></div>` : ''}
+      <div class="btns"><button class="btn primary" data-go="valve">Set its positions</button>
+        ${w.replace ? '' : '<button class="btn" data-act="next">Add another</button>'}<button class="btn" data-go="boards">Done</button></div></div>`;
+}
+function numberSide() {
+  return `<div class="card"><h3>You pick the gate; the board picks the number</h3><p class="note" style="margin-top:6px">
+    A new servo comes from the factory as number 1, so the board asks "who is number 1?", wiggles the one that answers,
+    and gives it the next free number in the shop (numbers are shop-wide; 1 always means "not yet assigned"). The
+    number is tied to the gate in the layout and never shown outside developer mode. A board takes up to 6. Two new ones at once, or none, are said plainly (the "(mockup)" buttons).</p></div>
+    <div class="card"><h3>Replacing works the same way</h3><p class="note" style="margin-top:6px">From a servo's page,
+    <b>Replace this servo</b>: unplug the old one, plug in the new one, and it takes over that gate. Try it from the
+    "A servo" tab.</p></div>`;
+}
+
+function valve() {
+  const v = S.valve;
+  const a = (v.deg - 90) * Math.PI / 180;
+  const x = 52 + 38 * Math.cos(a), y = 52 + 38 * Math.sin(a);
+  return `<div class="ph-head"><span class="ph-title">Drum sander valve</span><span>${S.dev ? 'servo #4 · ' : ''}Manifold wall</span></div>
+    <div class="pcard">
+      <div class="dial">
+        <svg class="gauge" viewBox="0 0 104 104" aria-label="Valve position">
+          <circle cx="52" cy="52" r="44" fill="#1a1a1a" stroke="#2e2e2e" stroke-width="2"/>
+          <line x1="52" y1="52" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#f0a500" stroke-width="5" stroke-linecap="round"/>
+          <circle cx="52" cy="52" r="5" fill="#e8e8e8"/>
+        </svg>
+        <div><div class="readout"><span>${v.deg}</span>°</div><div class="sub">read from the servo, not what it was told</div>
+          ${S.dev ? `<div class="sub" style="color:var(--dev)">${Math.round(v.deg / 360 * 4096)} counts · load 2%</div>` : ''}</div>
+      </div>
+      <div class="jog">${[-10,-1,1,10].map((d) => `<button class="btn" data-jog="${d}">${d > 0 ? '+' : ''}${d}°</button>`).join('')}</div>
+      <div class="btns"><button class="btn${v.open !== null ? '' : ' primary'}" data-set="open">Here is open${v.open !== null ? ` (${v.open}°)` : ''}</button>
+        <button class="btn${v.closed !== null ? '' : ' primary'}" data-set="closed">Here is closed${v.closed !== null ? ` (${v.closed}°)` : ''}</button></div>
+      ${v.open !== null && v.closed !== null ? `<div class="callout ok">Open ${v.open}°, closed ${v.closed}°.</div>
+        <div class="btns"><button class="btn primary">Test and save</button></div>
+        <p class="sub">The test move also records this valve's usual load, the starting point for its history.</p>` : ''}
+    </div>`;
+}
+function valveSide() {
+  return `<div class="card"><h3>The servo knows where it is</h3><p class="note" style="margin-top:6px">Its encoder is absolute
+    within a turn, so the readout is the valve's real angle at any moment, power-up included — no homing. Set open and
+    closed by jogging, or relax it (developer mode) and turn the valve by hand.</p></div>`;
+}
+
+function live() {
+  const rows = [
+    { t: 'Router table', on: true, gate: 'Router/jointer manifold', s: SERVOS[1] },
+    { t: 'Drum sander', on: false, gate: 'Drum sander valve', s: SERVOS[2] },
+    { t: 'Miter saw', on: false, gate: 'Miter saw gate (PWM)', s: null },
+  ];
+  return `<div class="ph-head"><span class="ph-title">Shop</span><span>collector running</span></div>
+    <div class="pcard">
+      ${rows.map((r) => `<div class="tool"><span class="dot ${r.on ? 'ok' : ''}"></span>
+        <span class="t">${r.t}<br><span class="sub">${r.gate}</span></span>
+        ${S.dev && r.s ? `<span style="width:74px">${meter(r.s)}</span>` : ''}
+        <span class="sub">${r.on ? 'running' : 'off'}</span></div>`).join('')}
+    </div>`;
+}
+function liveSide() {
+  return `<div class="card"><h3>Developer mode sees the meters</h3><p class="note" style="margin-top:6px">
+    The Live list stays a list of tools. In developer mode each bus gate's load meter also shows beside its tool. A "working
+    harder than usual" warning comes later, once logged shop numbers say where the line is.</p></div>`;
+}
+
+function settings() {
+  return `<div class="ph-head"><span class="ph-title">Settings</span><span></span></div>
+    <div class="pcard"><b style="font-size:13.5px">If a board loses the brain</b>
+      <div class="row"><span>Close its gates after</span><span class="sub">30 seconds</span></div></div>
+    <div class="pcard"><div class="row" style="border-top:0; padding-top:0"><span><b>Developer mode</b><br><span class="sub">Shows servo
+      load, raw readings and settings most shops never need. Every phone in the shop.</span></span>
+      <input type="checkbox" id="devmode2" ${S.dev ? 'checked' : ''} aria-label="Developer mode" style="width:20px;height:20px;accent-color:var(--dev)"></div></div>
+    ${S.dev ? `<div class="dev"><span class="tag">Developer</span>
+      <b style="font-size:13px">PWM servo pulse range</b>
+      <div class="row" style="border-top:0"><span class="sub">Pulse at 0°</span><span class="num">500 µs</span></div>
+      <div class="row"><span class="sub">Pulse at 180°</span><span class="num">2500 µs</span></div>
+      <p class="sub">Only for hobby servos that need more than 180°. Recalibrate your gates after changing it.</p></div>` : ''}`;
+}
+function settingsSide() {
+  return `<div class="card"><h3>Developer mode lives here, and in the switch above</h3><p class="note" style="margin-top:6px">
+    Turning it on reveals the PWM pulse range (moved out of the everyday settings), the load meters on Live, the numbers on
+    Boards and each servo's raw readings and risky controls. Nothing it shows is needed to run a shop.</p></div>`;
+}
+
+const screens = { boards: [boards, boardsSide], servo: [servo, servoSide], number: [number, numberSide], valve: [valve, valveSide], live: [live, liveSide], settings: [settings, settingsSide] };
+function render() {
+  const [p, s] = screens[S.screen];
+  phone.innerHTML = p(); side.innerHTML = s();
+  document.querySelectorAll('.tab').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.s === S.screen)));
+  document.getElementById('devmode').checked = S.dev;
+}
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'devmode' || e.target.id === 'devmode2') { S.dev = e.target.checked; render(); }
+});
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('button'); if (!t) return;
+  const w = S.wiz, v = S.valve;
+  if (t.dataset.s) S.screen = t.dataset.s;
+  if (t.dataset.go) S.screen = t.dataset.go;
+  if (t.dataset.servo) { S.servo.id = Number(t.dataset.servo); S.screen = 'servo'; }
+  if (t.dataset.gate) w.gate = t.dataset.gate;
+  if (t.dataset.kind) w.kind = t.dataset.kind;
+  const act = t.dataset.act;
+  if (act === 'pick') { w.problem = ''; w.step = 1; }
+  if (act === 'look') { w.problem = ''; w.step = w.step === 1 && !w.problem ? 2 : 1; }
+  if (act === 'two') { w.problem = 'two'; w.step = 1; }
+  if (act === 'none') { w.problem = 'none'; w.step = 1; }
+  if (act === 'restart') { w.problem = ''; w.step = w.replace ? 1 : 0; }
+  if (act === 'next') { w.num++; w.step = 0; w.gate = 'Table saw manifold'; w.kind = 'manifold'; }
+  if (act === 'replace') { const s = SERVOS.find((x) => x.id === S.servo.id); Object.assign(w, { replace: true, gate: s.name, kind: s.kind, step: 1, problem: '' }); S.screen = 'number'; }
+  if (t.dataset.go === 'number' || t.dataset.s === 'number') Object.assign(w, { replace: false, step: 0, problem: '', gate: 'Bandsaw valve', kind: 'valve' });
+  if (t.dataset.jog) v.deg = Math.max(0, Math.min(359, v.deg + Number(t.dataset.jog)));
+  if (t.dataset.set) v[t.dataset.set] = v.deg;
+  render();
+});
+render();
+</script>

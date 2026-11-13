@@ -79,18 +79,17 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   const r = validateTopology(t);
   check('controller link bad transport → invalid (controller)', !r.ok && hasCode(r, 'controller'));
 }
-// ── per-host actuator budget: ≤4 servos + ≤1 stepper on one controller ──
+// ── per-host actuator budget: a PWM board's channels, a bus board's chains ──
 {
   const hasMsg = (r, sub) => r.errors.some((e) => e.message.includes(sub));
   // A shop-in-a-box: one host, `servos` servo gates + `linears` linear selectors,
   // each feeding one tool. Valid apart from whatever count we're stressing.
   // `drives` follows what is being put on the host, so these cases test the
   // BUDGET rather than the board-mismatch rule. A host carrying any linear
-  // selector is a slider board; the mixed cases below are deliberately left as
-  // a slider board so the error they trip is the mixing one.
+  // selector is a bus board.
   const buildHost = (servos, linears) => {
     const t = { name: 'budget',
-      controllers: [{ id: 'h', role: 'primary', drives: linears > 0 ? 'linear' : 'servo' }],
+      controllers: [{ id: 'h', role: 'primary', drives: linears > 0 ? 'bus' : 'servo' }],
       elements: [{ id: 'dc', type: 'collector' }], ducts: [] };
     let n = 0;
     for (let i = 0; i < servos; i++, n++) {
@@ -124,38 +123,73 @@ check('validate twoGates ok', validateTopology(twoGates).ok, JSON.stringify(vali
   check('1 linear on one host → valid (at budget)', validateTopology(buildHost(0, 1)).ok);
   const r2 = validateTopology(buildHost(0, 2));
   check('2 linears on one host → invalid (controller)', !r2.ok && hasCode(r2, 'controller') && hasMsg(r2, 'max 1'));
-  // MIXED IS NOT A BUDGET, IT IS A CONTRADICTION. This used to assert that
-  // 4 servos + 1 linear on one host was valid — reading the two limits as a sum.
-  // They are alternatives: a board is flashed to drive the PWM bank or the serial
-  // bus, the pads overlap, and config.h #errors on a map that claims both. The
-  // old reading is what put a fifth port on every board in the configurator.
-  const rMix = validateTopology(buildHost(2, 1));
-  check('2 servos + 1 linear on one host → invalid (controller)',
-        !rMix.ok && hasCode(rMix, 'controller') && hasMsg(rMix, 'one board does one or the other'));
-  const rMix1 = validateTopology(buildHost(1, 1));
-  check('even 1 servo + 1 linear → invalid (it is not about count)',
-        !rMix1.ok && hasCode(rMix1, 'controller'));
-
-  // The other half of the same hardware fact: what a board is FLASHED to drive
-  // has to match what is drawn on it. A servo board with a rack on it is not a
-  // configuration the firmware can work around — those pads are the serial bus.
+  // A PWM board never takes a slider: its bus pads are PWM pads.
   const asServo = buildHost(0, 1);
   asServo.controllers[0].drives = 'servo';
   const rWrong = validateTopology(asServo);
   check('sliding gate on a board set up for servos → invalid (controller)',
         !rWrong.ok && hasCode(rWrong, 'controller') && hasMsg(rWrong, 'servo board but has a sliding gate'));
 
-  const asLinear = buildHost(1, 0);
-  asLinear.controllers[0].drives = 'linear';
-  const rWrong2 = validateTopology(asLinear);
-  check('servo gate on a board set up as a slider → invalid (controller)',
-        !rWrong2.ok && hasCode(rWrong2, 'controller') && hasMsg(rWrong2, 'sliding-gate board but has'));
+  // ── a bus board: valves, manifolds and one slider on its chains (2026-11-01) ──
+  const busHost = (servos, linears) => {
+    const t = buildHost(servos, linears);
+    t.controllers[0].drives = 'bus';
+    let id = 2;
+    for (const e of t.elements) {
+      if (e.type !== 'selector') continue;
+      if (e.kind === 'linear') e.linear = { bus: id++ }; else e.servo = { bus: id++ };
+    }
+    return t;
+  };
+  const okBus = (t) => validateTopology(t);
+  check('a bus board takes valves and a slider together → valid', okBus(busHost(5, 1)).ok,
+        JSON.stringify(okBus(busHost(5, 1)).errors));
+  const r7 = okBus(busHost(6, 1));
+  check('7 servos on a bus board → invalid (max 6)', !r7.ok && hasCode(r7, 'controller') && hasMsg(r7, 'max 6'));
+  const r2s = okBus(busHost(0, 2));
+  check('2 sliders on a bus board → invalid (max 1)', !r2s.ok && hasMsg(r2s, 'max 1'));
+  const rBudget = okBus(busHost(3, 0));
+  check('3 valves on a bus board are not held to the PWM budget', rBudget.ok, JSON.stringify(rBudget.errors));
+  const noServo = busHost(2, 0);
+  delete noServo.elements.find((e) => e.id === 'g1').servo;
+  check('a bus gate with no servo yet → valid', okBus(noServo).ok);
+
+  // Servo numbers: 2..253, once in the shop. 1 is "not yet assigned" and never stored.
+  const dupe = busHost(2, 0);
+  dupe.elements.find((e) => e.id === 'g1').servo.bus = 2;
+  const rDupe = okBus(dupe);
+  check('two gates naming one bus servo → invalid', !rDupe.ok && hasMsg(rDupe, 'bus servo 2 is already'));
+  for (const bad of [1, 0, 254, 2.5]) {
+    const t = busHost(1, 0);
+    t.elements.find((e) => e.id === 'g0').servo.bus = bad;
+    check(`bus servo number ${bad} → invalid`, !okBus(t).ok && hasMsg(okBus(t), 'out of range'));
+  }
+  const pwmBus = buildHost(1, 0);
+  pwmBus.elements.find((e) => e.id === 'g0').servo = { bus: 3 };
+  check('a bus servo number on a PWM board → invalid', !okBus(pwmBus).ok && hasMsg(okBus(pwmBus), 'not a bus board'));
+
+  // Chains: up to 2, naming this board's gates once each; a gate on none has its cable undrawn.
+  const chained = busHost(3, 1);
+  chained.controllers[0].chains = [['g1', 'g0'], ['g2', 'g3']];
+  check('two chains in wire order → valid', okBus(chained).ok, JSON.stringify(okBus(chained).errors));
+  const three = busHost(3, 0);
+  three.controllers[0].chains = [['g0'], ['g1'], ['g2']];
+  check('3 chains → invalid (max 2)', !okBus(three).ok && hasMsg(okBus(three), 'max 2'));
+  const twice = busHost(2, 0);
+  twice.controllers[0].chains = [['g0'], ['g0', 'g1']];
+  check('a gate on the chains twice → invalid', !okBus(twice).ok && hasMsg(okBus(twice), 'twice'));
+  const stray = busHost(1, 0);
+  stray.controllers[0].chains = [['g0', 'nope']];
+  check('a chain naming no gate → invalid', !okBus(stray).ok && hasMsg(okBus(stray), 'not a gate'));
+  const pwmChain = buildHost(1, 0);
+  pwmChain.controllers[0].chains = [['g0']];
+  check('chains on a PWM board → invalid', !okBus(pwmChain).ok && hasMsg(okBus(pwmChain), 'not a bus board'));
 
   // ── a sliding gate tops out at MAX_SLIDE_BRANCHES outlets ──
   {
     const wide = (n) => {
       const t = { name: 'wide',
-        controllers: [{ id: 'h', role: 'primary', drives: 'linear' }],
+        controllers: [{ id: 'h', role: 'primary', drives: 'bus' }],
         elements: [{ id: 'dc', type: 'collector' }], ducts: [] };
       const states = [{ id: 'home', isClosed: true, positionMm: 0 }];
       const branches = [];

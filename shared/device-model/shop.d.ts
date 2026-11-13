@@ -98,6 +98,8 @@ export function servoPulseRange(shop: unknown): { minUs: number; maxUs: number }
 export const SERVO_PULSE_BOUNDS: { min: number; max: number; span: number };
 /** How long a board waits without the brain before closing its gates (D-85): the layout's, or the default. */
 export function failsafeCloseMs(shop: unknown): number;
+/** The lowest free shop-wide bus servo number (2..253), skipping any the boards report answering; null when none. */
+export function nextBusId(shop: unknown, answering?: number[]): number | null;
 export const FAILSAFE_BOUNDS: { min: number; max: number; dflt: number };
 /** Can the shop lose this board without losing anything but a reading? See shop.js. */
 export function isOptionalBoard(shop: unknown, controllerId: string): boolean;

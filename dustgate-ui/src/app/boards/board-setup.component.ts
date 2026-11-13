@@ -11,6 +11,9 @@ import { systemsOf } from '@shop';
 import { bareHost } from '@device-model';
 import { clampUsers, machineOfPort, type ShopDoc } from '../services/shop-doc';
 import { isOptionalBoard } from '@shop';
+import { MAX_BUS_SERVOS_PER_HOST } from '@topology';
+import { DevModeService } from '../services/dev-mode';
+import { busServoLines, type BusServoLine } from './bus-servos';
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
   unpairPrompt,
@@ -95,6 +98,23 @@ interface BoardRow {
     @media (prefers-reduced-motion: reduce) { .binfull .cdot { animation: none; } }
     .net b { color: var(--text); font-weight: 600; }
 
+    /* A bus board's servos (2026-11-01): full width under the board's own line. */
+    .bus { flex: 1 1 100%; display: flex; flex-direction: column; gap: 2px; padding: 2px 0 6px; }
+    .svo { display: grid; grid-template-columns: 30px 1fr 78px; gap: 8px; align-items: center; text-align: left;
+           background: none; border: 0; border-top: 1px solid var(--border); color: inherit; font: inherit;
+           padding: 7px 0; cursor: pointer; width: 100%; }
+    .svo .sid { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--dev); }
+    .svo .sdot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-left: 8px; }
+    .svo .sdot.on { background: var(--success); } .svo .sdot.warn { background: var(--danger); }
+    .svo .what { min-width: 0; display: flex; flex-direction: column; }
+    .svo .sname { font-size: 13px; }
+    .meter { display: flex; flex-direction: column; gap: 3px; grid-column: 3; }
+    .meter .track { position: relative; height: 6px; border-radius: 3px; background: #262626; overflow: visible; }
+    .meter .fill { position: absolute; inset: 0 auto 0 0; background: var(--success); border-radius: 3px; max-width: 100%; }
+    .meter .usual { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--text); opacity: .6; }
+    .meter .lbl { font-size: 10.5px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+    .add-servo { align-self: flex-start; margin-top: 6px; }
+    .dev-box.link { flex: 1 1 100%; margin-bottom: 8px; }
     .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 6px 16px; margin-bottom: 14px; }
     .sec-title { font-size: 12.5px; color: var(--muted); margin: 0 0 6px 2px; }
 
@@ -192,7 +212,7 @@ interface BoardRow {
 
     <!-- Boards already in the layout -->
     <div class="card" *ngIf="rows.length">
-      <div class="row" *ngFor="let r of rows">
+      <div class="row" *ngFor="let r of rows; trackBy: rowKey">
         <div class="info">
           <ng-container *ngIf="renaming !== r.id; else renameBox">
             <div class="nm">
@@ -253,6 +273,39 @@ interface BoardRow {
             <button class="act add" (click)="commitRename()">Save</button>
             <button class="act" (click)="renaming = null">Cancel</button>
           </ng-template>
+        </div>
+
+        <!-- A BUS BOARD'S SERVOS (2026-11-01), by the gate each drives. The bar is the peak load of its last move; the
+             white tick is what it usually needs. Logged, not judged: nothing turns amber until real numbers say where the
+             line is (jeff). Numbers only in developer mode. -->
+        <div class="bus" *ngIf="r.drives === 'bus' && !r.primary">
+          <button type="button" class="svo" *ngFor="let l of busLines(r); trackBy: lineKey" (click)="openServo(r, l)"
+                  [title]="l.last === null ? 'No move reported yet' : 'Peak load of its last move: ' + l.last + '%' + (l.usual !== null ? ', usually ' + l.usual + '%' : '')">
+            <span class="sid" *ngIf="dev">{{ l.bus !== undefined ? '#' + l.bus : '—' }}</span>
+            <span class="sdot" *ngIf="!dev" [class.on]="l.state?.ok" [class.warn]="l.state && !l.state.ok"></span>
+            <span class="what"><span class="sname">{{ l.name }}</span><span class="sub">{{ servoSub(l) }}</span></span>
+            <span class="meter" *ngIf="l.last !== null">
+              <span class="track"><span class="fill" [style.width.%]="l.last"></span>
+                <span class="usual" *ngIf="l.usual !== null" [style.left.%]="l.usual"></span></span>
+              <span class="lbl">{{ l.last }}%<ng-container *ngIf="dev && l.usual !== null"> · usual {{ l.usual }}</ng-container></span>
+            </span>
+          </button>
+          <button type="button" class="act add-servo" (click)="addServo(r)"
+                  title="Plug in one new servo and give it to a gate">Add a servo</button>
+        </div>
+
+        <!-- Developer mode: what the link has lost — the board's own count of drops, its signal, and the link checks the
+             brain sent that never came back. -->
+        <div class="dev-box link" *ngIf="dev && r.link?.link as k">
+          <span class="dev-tag">Developer · communication</span>
+          <div class="dev-kv">
+            <span>Link drops (board's count)</span><span>{{ k.drops ?? '—' }}</span>
+            <span>Link checks unanswered</span><span>{{ k.lost }}</span>
+            <span>WiFi signal</span><span>{{ k.rssi !== undefined ? k.rssi + ' dBm' : '—' }}</span>
+            <ng-container *ngIf="r.link?.bus?.length">
+              <span>Servo reads missed</span><span>{{ missedReads(r) }}</span>
+            </ng-container>
+          </div>
         </div>
       </div>
     </div>
@@ -329,7 +382,36 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   private poll: ReturnType<typeof setInterval> | null = null;
   private statusSub: Subscription | null = null;
 
-  constructor(private api: ApiService, private router: Router) {}
+  constructor(private api: ApiService, private router: Router, private devMode: DevModeService) {}
+
+  // ── bus servos (2026-11-01) ───────────────────────────────────────────────
+  /** Developer mode: numbers, the usual load in figures, and each board's communication losses. */
+  dev = false;
+  busLines(r: BoardRow): BusServoLine[] {
+    const gates = this.topo ? selectorsOnController(this.topo, r.id) : [];
+    const c = this.topo ? controllersOf(this.topo).find((x) => x.id === r.id) : undefined;
+    return busServoLines(gates, r.link?.bus ?? [], c?.chains ?? []);
+  }
+  /** Rows keep their DOM across the 3 s refresh (busLines builds new objects each time), so a tap is never lost. */
+  lineKey = (_: number, l: BusServoLine) => l.gateId ?? `bus-${l.bus}`;
+  rowKey = (_: number, r: BoardRow) => r.id;
+  servoSub(l: BusServoLine): string {
+    if (l.bus === undefined) return `${l.kind} · no servo yet`;
+    if (!l.state) return `${l.kind} · waiting for the board to report it`;
+    if (!l.state.ok) return `${l.kind} · not answering`;
+    return `${l.kind} · at ${Math.round(l.state.deg ?? 0)}°`;
+  }
+  openServo(r: BoardRow, l: BusServoLine): void {
+    if (l.gateId) void this.router.navigate(['/boards/servo', r.id, l.gateId]);
+    else if (l.bus !== undefined) void this.router.navigate(['/boards/servo', r.id, `bus-${l.bus}`]);
+  }
+  addServo(r: BoardRow): void { void this.router.navigate(['/boards/add-servo', r.id]); }
+  missedReads(r: BoardRow): string {
+    const bus = r.link?.bus ?? [];
+    const missed = bus.reduce((n, b) => n + b.missed, 0), reads = bus.reduce((n, b) => n + b.reads, 0);
+    const worst = [...bus].sort((a, b) => b.missed - a.missed)[0];
+    return `${missed} of ${reads}` + (worst && worst.missed ? ` · most on #${worst.id}` : '');
+  }
 
   async ngOnInit(): Promise<void> {
     // No whenReady() here: every request waits for the API key itself, and gives up as "didn't answer" (api.service).
@@ -372,7 +454,10 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     // own: it can change under us (the device rejoining a different AP) and this
     // screen is already long-lived.
     this.statusSub = this.api.status$.subscribe(s => { this.ssid = s?.ssid ?? ''; });
+    this.devMode.load();
+    this.devSub = this.devMode.on$.subscribe((on) => { this.dev = on; });
   }
+  private devSub: Subscription | null = null;
 
   private async refreshBins(): Promise<void> {
     try {
@@ -393,6 +478,7 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     if (this.poll) clearInterval(this.poll);
     this.statusSub?.unsubscribe();
+    this.devSub?.unsubscribe();
   }
 
   // ── discovery ─────────────────────────────────────────────────────────────
@@ -772,12 +858,12 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     const bits: string[] = [];
     // What it drives, in the words the canvas uses for its ports. Read-only: the
     // board reported this, nobody chose it.
-    bits.push(r.drives === 'linear' ? 'sliding gate' : 'servo valves');
+    bits.push(r.drives === 'bus' ? 'bus servos' : 'servo valves');
     bits.push(r.primary ? 'primary — runs the app' : (r.host || 'no address'));
     // The build target is a developer's word ("xiao_c5"); the shop sees what it drives.
-    // A slider board's whole capacity is one rack, so "of 4" would be a lie on it.
-    bits.push(r.drives === 'linear'
-      ? `${r.gates} of 1 sliding gate`
+    // A bus board drives up to six servos, at most one of them a slider (topology.js MAX_BUS_SERVOS_PER_HOST).
+    bits.push(r.drives === 'bus'
+      ? `${r.gates} of ${MAX_BUS_SERVOS_PER_HOST} servos`
       : `${r.gates} of ${SERVO_CHANNELS_PER_BOARD} gates`);   // plural follows the ceiling, not the count
     if (r.link?.fw) bits.push(`fw ${r.link.fw}`);
     return bits.join(' · ');

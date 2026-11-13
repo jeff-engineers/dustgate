@@ -206,7 +206,8 @@ const PHRASINGS: Array<{
     // Usually a slider's board that has not reported since the brain started, so the layout's memory of it is all there
     // is (fixed 2026-10-17 for a switched-off board; an older layout can still say this).
     say: (d, m) => `${label(d, m[1])} is set up for ball valves, not a sliding gate. `
-                 + `If it really is the slider's board, power it on so it can say so, then save again.`,
+                 + `If it really is the slider's board, make sure it is switched on and running the bus board firmware, `
+                 + `then save again.`,
   },
   {
     re: /^selector missing controllerId$/,

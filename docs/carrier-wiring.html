@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <title>DustGate Carrier Wiring</title>
-<meta name="description" content="Wiring for the DustGate PWM carrier board: the perfboard build as it runs today, and the next PCB round with the sourced parts.">
+<meta name="description" content="Wiring for the DustGate boards: the PWM carrier as a perfboard and as the next PCB, and the bus-servo board on Seeed's driver board.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
@@ -58,11 +58,12 @@ td.mono { white-space: nowrap; }
 
 <div class="wrap">
   <h1>DustGate carrier wiring</h1>
-  <p class="lede">The one PWM board — gate, CT-sensing node or collector by what's fitted — drawn twice: the <b>perfboard</b> as it runs in the shop today, CT network included, and the <b>PCB</b>, V1, with the sourced parts. Both tabs use the V1 board's reference designators (R6, D3, J2 …), so a part here is the part on the board. Pad numbers come from <code>firmware/boards/xiao_c5.h</code>; the old reasoning (history) in <code>docs/archive/WIRING.md</code>, the part numbers in <code>docs/BOM.md</code>.</p>
+  <p class="lede">The one PWM board — gate, CT-sensing node or collector by what's fitted — drawn twice: the <b>perfboard</b> as it runs in the shop today, CT network included, and the <b>PCB</b>, V1, with the sourced parts. Both tabs use the V1 board's reference designators (R6, D3, J2 …), so a part here is the part on the board. The <b>bus board</b> tab is the other board: a XIAO on Seeed's Bus Servo Driver Board, driving ST3215 servos and one slider. Pad numbers come from <code>firmware/boards/xiao_c5.h</code>; the old reasoning (history) in <code>docs/archive/WIRING.md</code>, the part numbers in <code>docs/BOM.md</code>.</p>
 
   <div class="tabs" role="tablist" aria-label="Build">
     <button role="tab" id="tab-perf" aria-selected="true" data-build="perf">Perfboard</button>
     <button role="tab" id="tab-pcb" aria-selected="false" data-build="pcb">PCB</button>
+    <button role="tab" id="tab-bus" aria-selected="false" data-build="bus">Bus board</button>
   </div>
 
   <section id="view"></section>
@@ -105,11 +106,13 @@ const NETS = {
   'BAN':   { c: '--n12',  label: 'Banner black' },
   'RING':  { c: '--nsig', label: 'shop light DIN' },
   'NC':    { c: '--nnc',  label: 'not connected' },
+  'VIN':   { c: '--n12',  label: 'VIN 5–12 V' },
 };
 const sig = (pad, via) => ({ sig: pad, via });
 
 // A card hangs off one or more XIAO pads. pins: [printed label, net key | sig(pad, via), note]
 function build(kind) {
+  if (kind === 'bus') return buildBus();
   const P = kind === 'pcb';
   const left = [
     { pads: ['D0'], title: 'CT clamp jack', part: P ? 'J2 · CUI SJ1-3525N' : 'J2 · Adafruit TRRS breakout #5764',
@@ -195,6 +198,51 @@ function build(kind) {
     { t: '5 V buck', s: 'Adafruit MPM3610 #4739', pins: [['VIN', '12V'], ['GND', 'GND'], ['5V', '5VB'], ['EN', 'NC']] },
     { t: 'Schottky', s: '1N5817', pins: [['A', '5VB'], ['K', '5V']] },
     { t: 'Servo buck', s: 'DROK mini adjustable, ~6 V', pins: [['IN+', '12V'], ['IN−', 'GND'], ['OUT+', 'SERVO'], ['OUT−', 'GND']] },
+  ];
+  return { left, right, chain };
+}
+
+// The bus board: a XIAO socketed on Seeed's Bus Servo Driver Board (schematic v1.0, 2025-02-25). The driver board
+// owns D6/D7, the 5 V and the servo socket; everything else comes off its unfitted J2/J3 header footprints, which
+// is where the header pin in each note comes from (J2 = 5V, GND, 3V3, D10, D9, D8, D7; J3 = D0 … D6).
+function buildBus() {
+  const left = [
+    { pads: ['D0'], title: 'D0 — free', part: 'J3-1 · the only analog pad on this edge', pins: [],
+      notes: ['The CT clamp\'s pad on a PWM board; the bus build leaves it off'] },
+    { pads: ['D1'], title: 'Wake button', part: 'momentary, NO · J3-2',
+      pins: [['A', sig('D1', ''), 'INPUT_PULLUP'], ['B', 'GND', '']] },
+    { pads: ['D2'], title: 'Status pixel', part: 'Treedix WS2812B board · J3-3',
+      pins: [['DIN', sig('D2', '330 Ω'), ''], ['5V', '5V', 'J2-1'], ['GND', 'GND', 'J2-2'], ['DOUT', 'NC', 'other edge']] },
+    { pads: ['D3'], title: 'D3 — leave free', part: 'J3-4 · GPIO7 is a strapping pin', pins: [], notes: ['Nothing that can hold it LOW through reset'] },
+    { pads: ['D4', 'D5'], title: 'Status screen', part: 'SSD1306 0.96″ I²C, 0x3C · J3-5, J3-6',
+      pins: [['SDA', sig('D4', ''), 'J3-5'], ['SCL', sig('D5', ''), 'J3-6'], ['VCC', '3V3', 'J2-3 · never 5 V'], ['GND', 'GND', 'order varies — read yours']] },
+    { pads: ['D6'], title: 'Servo bus TX', part: 'on the driver board — no wire', pins: [],
+      notes: ['D6 low switches the line driver on (Q1 → U4); no direction pin'] },
+  ];
+  const right = [
+    { pads: ['5V'], title: '5 V', part: 'the driver board\'s buck, through its Schottky',
+      pins: [['J2-1', '5V', '1 A: XIAO + pixel']], notes: ['USB into the XIAO while 12 V is on is safe'] },
+    { pads: ['GND'], title: 'Common ground', part: 'the driver board\'s',
+      pins: [['J2-2', 'GND', '']] },
+    { pads: ['3V3'], title: '3V3 out', part: 'XIAO regulator',
+      pins: [['J2-3', '3V3', '']], notes: ['Feeds: the screen, and the driver board\'s buffers'] },
+    { pads: ['D10'], title: 'D10 — free', part: 'J2-4', pins: [],
+      notes: ['The RF transmitter\'s pad on a PWM board; the bus build leaves it off'] },
+    { pads: ['D9'], title: 'Endstop MAX', part: 'microswitch, NORMALLY CLOSED · J2-5',
+      pins: [['NC', sig('D9', ''), 'INPUT_PULLUP'], ['C', 'GND', ''], ['NO', 'NC', '']],
+      notes: ['Untriggered reads LOW; triggered or a broken wire reads HIGH'] },
+    { pads: ['D8'], title: 'Endstop HOME', part: 'microswitch, NORMALLY CLOSED · J2-6',
+      pins: [['NC', sig('D8', ''), 'INPUT_PULLUP'], ['C', 'GND', ''], ['NO', 'NC', '']],
+      notes: ['HOME/MAX is a wiring label: set-up asks which end is left'] },
+    { pads: ['D7'], title: 'Servo bus RX', part: 'on the driver board — no wire', pins: [],
+      notes: ['Quiet while we transmit: no echo of our own bytes'] },
+  ];
+  const chain = [
+    { t: 'J1 terminal', s: '3.5 mm, 2-pin, 5–12 V', pins: [['1', 'VIN'], ['2', 'GND']] },
+    { t: 'Input guard', s: 'D3 TVS 15 V · D2 SS54', pins: [['TVS', 'clamps'], ['SS54', 'reverse']] },
+    { t: '5 V buck', s: 'TPS54302, on the board', pins: [['VIN', 'VIN'], ['5V', '5VB']] },
+    { t: 'Schottky', s: 'D1 B5819WS', pins: [['A', '5VB'], ['K', '5V']] },
+    { t: 'Servo socket', s: 'J5 · 2.5 mm 3-pin', pins: [['3', 'data'], ['2', 'VIN'], ['1', 'GND']] },
   ];
   return { left, right, chain };
 }
@@ -550,7 +598,26 @@ const COPY = {
     intro: 'V1: the same netlist with the sourced parts and the board\'s own designators. The same Treedix pixel board and DROK servo buck as the perfboard (the DROK on wire pads, where a Pololu D24V22F6 can land instead), the CUI SJ1-3525N switched jack (pin numbers from its datasheet), the MPM3610 on a socket, a PTC fuse, TVS and 100 µF on the 12 V input, a 4-way terminal and ESD parts for the Banner, and an Enable button on D9. New on V1: J4 for the shop light, J5 a Qwiic socket, J6 putting D3 on a header, and J7 / J8, optional sockets for panel buttons.',
     warn: '<b>Nothing here has been on a board.</b> Before soldering, read the OLED\'s pin order (V1 is drawn GND, VCC, SCL, SDA) and push each part through a 1:1 paper print. J7 and J8 have no series resistor: keep a panel button\'s lead short. Build one, read the CT floor, then build nine.',
   },
+  bus: {
+    h: 'Bus board', status: '<span class="status plan">perfboard add-ons not yet built</span>',
+    intro: 'A XIAO C5 socketed on Seeed\'s Bus Servo Driver Board (from its schematic, v1.0, 2025-02-25). The driver board already does the hard part: its buck feeds the XIAO\'s 5V pad through a Schottky, and two buffers turn D6/D7 into the servos\' one-wire, half-duplex bus at 3.3 V. Everything else on the XIAO comes out on two unfitted 7-pin header footprints, J2 and J3, beside the socket: solder headers there and run the endstops, the screen, the button and the pixel to a perfboard. D0 and D10 stay free. The board, D6/D7 and a servo have run (2026-11-01); the endstops, screen, button and pixel on this board have not.',
+    warn: '<b>Before the first power-up:</b> JP1 and JP2 must be OPEN — they tie the driver board\'s own USB-serial chip to D7/D6, and with the XIAO fitted a bridged JP2 fights D6. Push the XIAO fully into its socket: half-seated, nothing answers. The servos get VIN raw, so the input is the servos\' voltage (12 V for an ST3215). Meter each endstop: C to NC beeps untriggered and opens when pressed.',
+  },
 };
+
+// J2/J3 on the driver board, pin 1 at the square pad. Pin 7 of each is a bus pad: no wire.
+const BUS_HEADERS = `
+    <h2>The driver board's headers, J2 and J3</h2>
+    <p>Two unfitted 7-pin footprints beside the XIAO's socket, carrying the XIAO's pads one for one. Pin 1 is the square pad; check it against the silkscreen on yours.</p>
+    <div class="tablewrap"><table><thead><tr><th>Pin</th><th>J2</th><th>J3</th></tr></thead><tbody>
+      <tr><td class="mono">1</td><td>5V</td><td>D0 — free</td></tr>
+      <tr><td class="mono">2</td><td>GND</td><td>D1 — wake button</td></tr>
+      <tr><td class="mono">3</td><td>3V3</td><td>D2 — status pixel</td></tr>
+      <tr><td class="mono">4</td><td>D10 — free</td><td>D3 — leave free</td></tr>
+      <tr><td class="mono">5</td><td>D9 — endstop MAX</td><td>D4 — screen SDA</td></tr>
+      <tr><td class="mono">6</td><td>D8 — endstop HOME</td><td>D5 — screen SCL</td></tr>
+      <tr><td class="mono">7</td><td>D7 — bus RX, no wire</td><td>D6 — bus TX, no wire</td></tr>
+    </tbody></table></div>`;
 
 function render(kind) {
   const b = build(kind), c = COPY[kind];
@@ -562,7 +629,7 @@ function render(kind) {
     <div class="warn">${c.warn}</div>
     <h3>Every wire</h3>
     ${wireTable(b)}
-    <h2>The CT clamp circuit, close up</h2>
+    ${kind === 'bus' ? BUS_HEADERS : `<h2>The CT clamp circuit, close up</h2>
     <p>Everything between the clamp's plug and D0, drawn as a schematic with each part named. The perfboard tab shows the Adafruit breakout's printed labels; the PCB tab, the SJ1-3525N's pin numbers. All of it is fitted on the latest perfboards; meter the diodes' direction before power-up. C1 is a 10 µF electrolytic, as on the planer-sensor node. The designators are the V1 board's.</p>
     <div class="sheet">${drawCT(kind)}</div>
     <div class="tablewrap" style="margin-top:12px"><table><thead><tr><th>Part</th><th>Value</th><th>From</th><th>To</th><th>Job</th></tr></thead><tbody>
@@ -591,11 +658,11 @@ function render(kind) {
       <tr><td>U2 pin 4</td><td class="mono">emitter</td><td>U2 pin 4</td><td>GND</td><td>the logic side's return</td></tr>
       <tr><td><b>D5</b></td><td class="mono">1N4148</td><td>U2 pin 2 (anode)</td><td>U2 pin 1 (cathode, the bar)</td><td>ESD: keeps reverse voltage off the LED${kind === 'pcb' ? '' : ' — recommended'}</td></tr>
       <tr><td><b>D2</b></td><td class="mono">P4KE18A</td><td>GND (anode)</td><td>12 V at the terminal (cathode)</td><td>ESD: clamps a hit where it enters${kind === 'pcb' ? '' : ' — recommended'}</td></tr>
-    </tbody></table></div>`;
+    </tbody></table></div>`}`;
   document.querySelectorAll('.tabs button').forEach((t) => t.setAttribute('aria-selected', String(t.dataset.build === kind)));
   try { localStorage.setItem('dg-wiring-build', kind); } catch (e) {}
 }
-let current = location.hash === '#pcb' ? 'pcb' : (() => { try { return localStorage.getItem('dg-wiring-build') || 'perf'; } catch (e) { return 'perf'; } })();
+let current = ['#pcb', '#bus'].includes(location.hash) ? location.hash.slice(1) : (() => { try { return localStorage.getItem('dg-wiring-build') || 'perf'; } catch (e) { return 'perf'; } })();
 document.querySelectorAll('.tabs button').forEach((t) => t.addEventListener('click', () => { current = t.dataset.build; render(current); }));
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render(current));
 new MutationObserver(() => render(current)).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });

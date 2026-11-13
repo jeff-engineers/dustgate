@@ -310,7 +310,7 @@ bool HttpApiServer::begin() {
     // That was a second copy of the node program's frame handler (WELCOME construction, SET
     // parsing, the arrival report), kept alive after the real node program existed, and it was
     // the reason this socket needed a hook at all. It is gone: the slider and the PWM bank are
-    // nodes (`xiao_c5_linear`, `xiao_c5`), and a primary is a brain.
+    // nodes (`xiao_c5_bus`, `xiao_c5`), and a primary is a brain.
     //
     // What is left is the one job a primary's /nodelink has: accept a node's JOIN and bind the
     // socket to that node's pairing. The sketch owns what that means (which bus), so every event

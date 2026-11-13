@@ -33,6 +33,11 @@ export { BOARD_H, BOARD_W };
  *  THREE since 2026-09-16, down from four: one unified pin map puts the 315 MHz
  *  transmitter on D10, so D7/D8/D9 are all the PWM channels a board has. */
 export const SERVO_PORTS = 2;
+/** A bus board's two chain ports are channels BUS_CHAIN_PORT and BUS_CHAIN_PORT + 1 on the canvas (2026-11-01): drawing
+ *  numbers only, never in the layout, which keeps chains (Controller.chains) and servo numbers instead. Clear of the PWM
+ *  channels and of the slider port (SERVO_PORTS), so no test of one can match the other. */
+export const BUS_CHAIN_PORT = 10;
+export const isChainPort = (ch: number): boolean => ch >= BUS_CHAIN_PORT;
 export const PORT_PITCH = 18;
 export const PORT_W = 12;
 export const PORT_H = 7;
@@ -78,6 +83,8 @@ export interface Cell { col: number; row: number; }
  *  have left the remaining four sitting half a pitch left of centre, and a lone
  *  slider port out at the right-hand end of a strip that no longer exists. */
 export function portPos(c: Pt, ch: number, linear = false): Pt {
+  // A bus board's two chain ports, centred like a PWM pair: one chain leaves each side.
+  if (isChainPort(ch)) return { x: c.x - PORT_PITCH / 2 + (ch - BUS_CHAIN_PORT) * PORT_PITCH, y: c.y + PORT_DY };
   // One port, and it belongs in the middle of the board.
   if (linear) return { x: c.x, y: c.y + PORT_DY };
   const first = -((SERVO_PORTS - 1) * PORT_PITCH) / 2;     // centre the port strip
@@ -94,7 +101,7 @@ export function ctPortPos(c: Pt): Pt {
 /** Where a clamp lead leaves the CT jack: its bottom edge, as portExit() is for a servo port. */
 export function ctPortExit(c: Pt): Pt { const p = ctPortPos(c); return { x: p.x, y: p.y + PORT_H / 2 }; }
 
-export function portWidth(ch: number): number { return ch >= SERVO_PORTS ? STEPPER_W : PORT_W; }
+export function portWidth(ch: number): number { return ch >= SERVO_PORTS && !isChainPort(ch) ? STEPPER_W : PORT_W; }
 /**
  * Where a cable leaves the board: ALWAYS the underside of its port.
  *
@@ -105,7 +112,7 @@ export function portWidth(ch: number): number { return ch >= SERVO_PORTS ? STEPP
  * strip itself and cableRun detours them clear instead.
  */
 export function portExit(c: Pt, ch: number): Pt {
-  const p = portPos(c, ch, ch >= SERVO_PORTS);
+  const p = portPos(c, ch, ch >= SERVO_PORTS && !isChainPort(ch));
   return { x: p.x, y: p.y + PORT_H / 2 };
 }
 

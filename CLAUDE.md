@@ -113,6 +113,8 @@ Decided; don't relitigate them in review or suggestions.
 - **Never require anything a network is allowed to block.** mDNS may be a fast path, never a requirement; every
   discovery path degrades to a typed IP. A Tasmota has no mDNS (a set SetOption bit is not a feature): it is found by
   the subnet sweep. An unreachable name is not evidence the network blocks anything — check the board is powered.
+  **Never rely on a static IP or a DHCP reservation for a DustGate board** (jeff, 2026-11-12): nobody is walked
+  through their router's settings. A board that cannot get an address is fixed in the firmware, not the router.
 - **The collector gets its own board** — its transmitter, clamp and bin beam all on ONE board, named by the collector's
   `controllerId` (absent = the primary's own; a Pi brain has no pads and raises `collector-no-board`). The press retry
   policy stays on the brain (`control/CollectorPress.h`): only the brain can read whether the blower agreed.
