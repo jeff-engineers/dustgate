@@ -158,7 +158,8 @@ node — its servos share one brick, and the wire-length limit assumes only the 
      a gross figure; the valve's own share needs the uncoupled baseline at the same speed, as above.
      **The Feetech STS3032 is a good fit for later (jeff, 2026-11-01)** — 4.5 kg·cm stall / 1.5 kg·cm rated at 6 V, the
      same 12-bit magnetic encoder and STS protocol as the ST3215, metal gears, 1.2 A stall (vs 2.7 A, so roughly twice the
-     wire run), ~$12 on AliExpress (dear in the US). Needs a 6 V supply for the servos (a 12→6 V buck on the board). The
+     wire run). Price: ~$40 from US sellers (RobotShop $41.66 with tariffs), ~$32 in Japan; the ~$12 AliExpress figure
+     was the metal horn, not the servo (2026-11-13) — so it costs MORE than a $21.99 ST3215. Needs a 6 V supply for the servos (a 12→6 V buck on the board). The
      Waveshare SC09 is too tight (0.7 kg·cm rated = exactly the valve; potentiometer; SCS protocol). **For now: ST3215.**
   1. **How much servo a printed gate needs.** On each gate (ball valve, manifold, slider): `mode 0`, `torque on`, then
      `cycle <open> <closed> 10`. Note the WORST peak load. Well under ~30% of an ST3215's torque means a servo a third the
