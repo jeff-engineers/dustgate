@@ -105,3 +105,4 @@ firmware/firmware.ino.cpp
 
 # dev.sh monitor both — per-session serial logs
 .monitor-logs/
+.dustgate-ui-build.sha
