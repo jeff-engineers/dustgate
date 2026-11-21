@@ -24,14 +24,15 @@
 #     tools/.env. --pass SECRET works but lands in your shell history; prefer
 #     --ssid alone (it asks for the password hidden) or --ask.
 #     Flashing the filesystem ERASES the saved shop (topology.json shares that
-#     partition with the Angular bundle). The copy-off-and-restore step is
-#     COMMENTED OUT as of 2026-08-22 — see "0. Save the shop layout" in
-#     deploy.sh. Until it returns, save one by hand first if it matters:
+#     partition with the Angular bundle), so deploy.sh copies the layout off
+#     the board first and puts it back after ("0. Save the shop layout" there).
+#     To keep a copy by hand as well:
 #       curl -H "X-Api-Key: <key>" http://<host>/api/topology > my-shop.json
 #       bash tools/restore-topology.sh my-shop.json
 #
 #   bash dev.sh flash-node [host]   # NODE: node firmware + WiFi creds
-#     Three servo valves, a CT clamp, no UI, no plug polling. NOT "a dumb
+#     One servo valve (plus a fob servo), a CT clamp, a bin beam and the RF
+#     transmitter; no UI. Which of them it uses is a LAYOUT fact. NOT "a dumb
 #     actuator bank" any more — a node owns any control loop faster than a WiFi
 #     round trip (a homing sweep, a 60 Hz RMS) and no interpretation of the
 #     document. Its hostname is load-bearing (mDNS, the Boards screen, link.host
@@ -43,7 +44,7 @@
 #   bash dev.sh flash-node collector  # ...or a NODE, if the brain is elsewhere
 #     There is no --collector any more, because there is no collector BUILD.
 #     One pin map serves every PWM board — CT on D0, bin on D6, servo channels
-#     0/1/2 on D7/D8/D9, transmitter on D10 — so what makes a board a collector
+#     0/1 on D7/D8, transmitter on D10 — so what makes a board a collector
 #     is the LAYOUT pointing it at a bin, a clamp and a remote.
 #     A NODE can do all three (clamp, bin beam, transmitter) since 2026-10-04,
 #     so a collector's board may be a node.
@@ -53,8 +54,9 @@
 #
 #   bash dev.sh flash --bus           # a PRIMARY that drives the bus (FROZEN)
 #   bash dev.sh flash-node --bus      # a NODE that drives bus servos and a slider
-#     Same XIAO C5, same two roles. What changes is that the three PWM channels
-#     become one ST3215 serial bus servo on D6/D7 plus two endstops on D8/D9 —
+#     Same XIAO C5, same two roles. What changes is that the two PWM channels
+#     become a chain of ST3215 serial bus servos on D6/D7 plus a slider's two
+#     endstops on D8/D9 —
 #     PWM and serial never share a board, so this is a different program, not a
 #     runtime option. config.h #errors if a pin map ever claims both.
 #
@@ -73,7 +75,7 @@
 #                             Rockler address when no layout names one, so it
 #                             works before any control.rf block exists.
 #                             ⚠️ MOVE THE MODULE'S DATA WIRE if this board was
-#                             built before that date — D9 is servo channel 2 now.
+#                             built before that date — D9 is a spare pad now.
 #                             ⚠️ Put a LAMP in the receiver's outlet, not the
 #                             collector: a blower cannot spin up and coast down
 #                             fast enough to read.
@@ -166,7 +168,7 @@ PRIMARY_ENV="xiao_c5_primary"
 NODE_ENV="xiao_c5"
 
 # The SLIDER pair. Same board and the same two roles — what changes is that the
-# three PWM channels are traded for one ST3215 on a serial bus, because PWM and
+# two PWM channels are traded for ST3215s on a serial bus, because PWM and
 # serial never share a board. A slider board is therefore a THIRD thing to flash
 # in each role, not a flag on the servo build, and `--slider` picks it.
 LINEAR_PRIMARY_ENV="xiao_c5_bus_primary"
@@ -174,7 +176,7 @@ LINEAR_NODE_ENV="xiao_c5_bus"
 
 # THE COLLECTOR ENVS ARE GONE (2026-09-16). There used to be a pair here, a
 # fourth thing to flash in each role, because a CT and a transmitter would not
-# fit beside four servo channels. Three channels puts the transmitter on D10 and
+# fit beside four servo channels. Two channels puts the transmitter on D10 and
 # every pad gets one owner, so a collector board is an ordinary primary or an
 # ordinary node. `--collector` is still ACCEPTED below and does nothing but
 # print, so muscle memory does not fail a flash.
@@ -632,8 +634,8 @@ parse_provision_overrides() {
       --pass=*) OV_PASS="${1#*=}"; shift ;;
       --ask)    OV_ASK=1; shift ;;
       --save)   OV_SAVE=1; shift ;;
-      # The rack board: one ST3215 on a serial bus and two endstops, instead of
-      # three PWM channels. Consumed here rather than passed through, because the
+      # The bus board: ST3215s on a serial bus and a slider's two endstops,
+      # instead of two PWM channels. Consumed here rather than passed through, because the
       # env it selects is handed to deploy.sh as --env= below.
       --bus|--slider|--linear|--rack) FLASH_ENV="$LINEAR_PRIMARY_ENV"; shift ;;
       # No longer selects anything — kept so an old command line still works.
@@ -818,8 +820,7 @@ run_flash() {
     echo "        D0  CT clamp         the only analog pad on the edge"
     echo "        D6  bin sensor       opto output, LOW = full"
     echo "        D7  servo channel 0  the gate, if this board drives one"
-    echo "        D8  servo channel 1  fob servo, ON"
-    echo "        D9  servo channel 2  fob servo, OFF"
+    echo "        D8  servo channel 1  fob servo"
     echo "        D10 315 MHz TX       and nothing else shares it"
     echo ""
     echo "  What makes this a collector is the LAYOUT — a bin, a clamp and a"
@@ -827,9 +828,9 @@ run_flash() {
     echo ""
     echo "  ⚠️  WHAT ACTUALLY WORKS TODAY is less than that list implies:"
     echo "        fob servos    yes — ordinary servo channels (servo / stroke)"
-    echo "        RF TX         yes on a PRIMARY; NOT on a node (still in .ino)"
-    echo "        bin sensor    yes on a PRIMARY; NOT on a node (still in .ino)"
-    echo "        CT clamp      code is in on both, NEVER RUN on either"
+    echo "        RF TX         yes, on a primary and on a node"
+    echo "        bin sensor    yes, on a primary and on a node"
+    echo "        CT clamp      yes — starts the collector and moves a gate"
     echo "      docs/archive/WIRING.md#9-bin-sensor has the table."
     echo ""
     echo "  ⚠️  THIS IS A COMPLETE PRIMARY — web UI, topology, plug polling."
@@ -850,8 +851,8 @@ run_flash() {
     echo ""
     echo "  The routing brain, on the board that drives the rack. Everything a"
     echo "  primary has — topology, web UI, Shelly polling, NodeLink, the screen"
-    echo "  — with the three PWM channels traded for one bus servo on D6/D7 and"
-    echo "  two endstops on D8/D9."
+    echo "  — with the two PWM channels traded for bus servos on D6/D7 and a"
+    echo "  slider's two endstops on D8/D9."
     echo ""
     echo "  It HOMES BEFORE IT CAN MOVE: a step-counting servo has no datum of"
     echo "  its own. Expect the carriage to sweep after the first boot."
@@ -933,8 +934,8 @@ run_flash_node() {
   echo "▶ Secondary NODE — flashing the node firmware."
   echo "  Target: $(describe_env "$node_env")"
   echo ""
-  echo "  Up to THREE servo valves (D7/D8/D9) and a CT clamp (D0). No web UI, no"
-  echo "  plug polling: the primary owns the document and sends already-resolved"
+  echo "  One servo valve (D7), a fob servo (D8) and a CT clamp (D0). No web UI:"
+  echo "  the brain owns the document and sends already-resolved"
   echo "  angles, never state names."
   echo ""
   echo "  NOT \"a dumb actuator bank\" — that phrasing was wrong twice. A node"
