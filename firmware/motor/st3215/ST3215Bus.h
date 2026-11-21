@@ -76,6 +76,9 @@ enum : uint8_t {
     ST_REG_GOAL_POSITION   = 42,
     ST_REG_GOAL_TIME       = 44,   // 2 bytes
     ST_REG_GOAL_SPEED      = 46,   // 2 bytes, steps/s
+    // 2 bytes, RAM, 0..1000 = tenths of a percent of full torque. Docs only: `stallhome` writes it and reads it back,
+    // and reports whether a torque cycle puts it back to full.
+    ST_REG_TORQUE_LIMIT    = 48,
     ST_REG_LOCK            = 55,   // 1 = EEPROM write-protected
     // 2 bytes, and NOT a plain 0..4095 counter. It is a position on a 4096-count
     // circle reported sign-magnitude: 0x8B51 is -2897, not 35665. It wraps, and

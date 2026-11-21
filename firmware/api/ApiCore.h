@@ -16,7 +16,9 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <cstdlib>
 #include <ArduinoJson.h>
+#include "../control/NodeLink.h"   // the bus servo bounds and parseServoFrame, so a refusal here is the board's own
 
 namespace api {
 
@@ -67,6 +69,15 @@ public:
     virtual bool jog(const std::string& /*controllerId*/, int /*channel*/, int /*angle*/, bool /*detach*/, std::string& why) {
         why = "no servo support on this brain"; return false;
     }
+    // A bus servo, by number, on a paired board (2026-11-01): a setup move to `angle` (0..359), a SERVO order (find,
+    // assign, wiggle, torque, reset, scan — nodelink.js servo()) and its reply. `why` is set on a refusal.
+    virtual bool jogBus(const std::string& /*controllerId*/, int /*bus*/, int /*angle*/, std::string& why) {
+        why = "no bus servos on this brain"; return false;
+    }
+    virtual uint32_t servoOp(const std::string& /*controllerId*/, const char* /*op*/, int /*bus*/, int /*to*/, int /*on*/, std::string& why) {
+        why = "no bus servos on this brain"; return 0;
+    }
+    virtual std::string servoReply(const std::string& /*controllerId*/, uint32_t /*seq*/) { return std::string(); }
     virtual void resetAll() {}
     virtual void pairNode(const std::string& /*host*/, const std::string& /*name*/, bool /*remove*/, bool /*takeover*/) {}
     virtual void pauseLinks(bool /*paused*/) {}
@@ -120,10 +131,19 @@ inline bool handle(const Request& req, Backend& be, Response& out) {
     if (post && p == "/api/servo/jog") {
         StaticJsonDocument<160> d;
         if (deserializeJson(d, req.body)) { out = error(400, "invalid JSON"); return true; }
-        if (!d.containsKey("channel")) { out = error(400, "missing 'channel'"); return true; }
-        const int ch = d["channel"].as<int>();
         const char* cid = d["controllerId"].as<const char*>();
         const std::string controller = cid ? cid : "";
+        // A bus servo, by number: angles are its encoder's, a whole turn.
+        if (d.containsKey("bus")) {
+            const int bus = d["bus"] | 0, angle = d["angle"] | -1;
+            if (!topo::nodelink::busIdOk(bus)) { out = error(400, "bus servo number out of range"); return true; }
+            if (angle < 0 || angle > topo::nodelink::kMaxBusAngle) { out = error(400, "angle out of range (0-359)"); return true; }
+            std::string why;
+            out = be.jogBus(controller, bus, angle, why) ? ok() : error(why.rfind("no bus", 0) == 0 ? 501 : 502, why.c_str());
+            return true;
+        }
+        if (!d.containsKey("channel")) { out = error(400, "missing 'channel'"); return true; }
+        const int ch = d["channel"].as<int>();
         // A paired board may have up to 16 channels; the brain's own bank is its build's, which a shell knows.
         if (ch < 0 || ch >= 16) { out = error(400, "channel out of range"); return true; }
         const bool detach = d["detach"] | false;
@@ -136,6 +156,35 @@ inline bool handle(const Request& req, Backend& be, Response& out) {
         std::string why;
         if (be.jog(controller, ch, angle, detach, why)) out = ok();
         else out = error(why.rfind("no servo", 0) == 0 ? 501 : 502, why.c_str());
+        return true;
+    }
+
+    // ── a bus servo's SERVO orders (2026-11-01) ────────────────────────────
+    // POST {controllerId, op, bus?, to?, on?} → {seq}; GET ?controllerId=&seq= → {done:false} or {done:true, reply}.
+    // Two calls rather than one that waits: a scan takes seconds and the brain's one thread must not.
+    if (post && p == "/api/servo/op") {
+        StaticJsonDocument<256> d;
+        if (deserializeJson(d, req.body)) { out = error(400, "invalid JSON"); return true; }
+        const char* cid = d["controllerId"].as<const char*>();
+        if (!cid || !*cid) { out = error(400, "missing 'controllerId'"); return true; }
+        // Bounded here exactly as the board bounds the frame (parseServoFrame), so a refusal is said now, not lost.
+        StaticJsonDocument<192> f;
+        f["t"] = "SERVO"; f["seq"] = 1; f["op"] = d["op"];
+        if (d.containsKey("bus")) f["bus"] = d["bus"];
+        if (d.containsKey("to"))  f["to"]  = d["to"];
+        if (d.containsKey("on"))  f["on"]  = d["on"];
+        topo::nodelink::ServoOrder o; const char* err = nullptr;
+        if (!topo::nodelink::parseServoFrame(f.as<JsonObjectConst>(), o, err)) { out = error(400, err); return true; }
+        std::string why;
+        const uint32_t seq = be.servoOp(cid, topo::nodelink::kServoOps[o.op], o.bus, o.to, o.op == 3 ? (o.on ? 1 : 0) : -1, why);
+        if (!seq) { out = error(why.rfind("no bus", 0) == 0 ? 501 : 409, why.c_str()); return true; }
+        StaticJsonDocument<48> r; r["seq"] = seq;
+        std::string s; serializeJson(r, s); out = json(s);
+        return true;
+    }
+    if (req.method == "GET" && p == "/api/servo/reply") {
+        const std::string rep = be.servoReply(req.param("controllerId"), (uint32_t)std::strtoul(req.param("seq").c_str(), nullptr, 10));
+        out = json(rep.empty() ? std::string("{\"done\":false}") : "{\"done\":true,\"reply\":" + rep + "}");
         return true;
     }
 

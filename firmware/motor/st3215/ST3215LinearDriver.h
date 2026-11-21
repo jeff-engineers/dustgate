@@ -40,7 +40,7 @@
 // the geometry, because counts/mm is DERIVED from the rack spec rather than
 // fitted to anything.
 //
-// Behind a NodeLink socket it runs too: the xiao_c5_linear node homed and moved a gate in 2026-09, and through the Pi
+// Behind a NodeLink socket it runs too: the xiao_c5_bus node homed and moved a gate in 2026-09, and through the Pi
 // brain on 2026-10-17. Still unproven: behaviour under load, and 9V vs 12V.
 //
 // Note that HOME_DIRECTION came out -1 on that mount — bit 15 moves the carriage
@@ -154,6 +154,12 @@ public:
     int      tempC();
     int      load();
     ST3215Bus& bus() { return _bus; }
+    /** Open the bus with no servo yet: the bus board's valves share it before the slider has a number. */
+    bool openBus() { return _bus.baud() || _bus.begin(ST3215_BAUD); }
+    /** The slider's servo number, from its SET (shop-wide, handed out by the brain). A new number is a new servo: it
+     *  starts offline and is set up afresh, so its position needs a sweep, exactly as after an unplug. 0 = none yet. */
+    void setId(uint8_t id) { if (id == _id) return; _id = id; _online = false; }
+    uint8_t id() const { return _id; }
 
 private:
     // Send one relative step command. `steps` is signed in DATUM-RELATIVE terms:
@@ -174,6 +180,7 @@ private:
     long stepsRemaining();
 
     ST3215Bus _bus;
+    uint8_t   _id       = 0;        // the slider's servo number; 0 = not told yet
     bool      _online   = false;
     bool      _moving   = false;
     bool      _homing   = false;

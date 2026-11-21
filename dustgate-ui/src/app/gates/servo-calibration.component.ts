@@ -1,3 +1,4 @@
+import { failureReason, reportFailure } from '../services/failure';
 import { Component, EventEmitter, Input, OnInit, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -433,7 +434,7 @@ export class ServoCalibrationComponent implements OnInit {
       // controllerId comes from the selector being edited, which the board picker
       // above mutates live — so re-assigning a gate to a node re-points the jog
       // arrows at that node immediately, without a save/reload in between.
-      await this.api.jogServo(this.sel.servo?.channel ?? 0, Math.round(angle), this.sel.controllerId);
+      await this.api.jogGate(this.sel, Math.round(angle));
       this.jogError = '';
       return true;
     } catch (e: unknown) {
@@ -447,7 +448,10 @@ export class ServoCalibrationComponent implements OnInit {
           ? 'This board was built without servo support, so nothing will move. Reflash with servos enabled to calibrate.'
           : status === 404
             ? 'This device doesn\'t have the servo jog endpoint yet — update its firmware to calibrate.'
-            : 'Couldn\'t reach the shop brain. Check it\'s powered and on the network, then tap an arrow to try again.';
+            // The brain's own reason when it gave one (D-84): "didn't answer" only when nothing answered. A bus board
+            // that has dropped its link answers 502 "that board is not linked", which is not the brain being away.
+            : `Couldn't move the gate: ${failureReason(e)}. Tap an arrow to try again.`;
+      reportFailure('Gate setup · move', e, this.jogError);
       return false;
     } finally {
       this.busy = false;

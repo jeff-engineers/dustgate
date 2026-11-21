@@ -676,6 +676,34 @@
 
   <hr class="rule"/>
 
+  <!-- ══ 5b. A BUS BOARD'S CHAINS ════════════════════════════════════ -->
+  <section class="sec">
+    <h3>5b · A bus board: two chain ports, the cable drawn as wired</h3>
+    <span class="pill built">Built · 2026-11-01</span>
+    <div class="card">
+      <svg viewBox="0 0 520 170" style="width:100%;max-width:520px;height:auto;display:block" role="img"
+           aria-label="A bus board with one chain: port 1 to the first valve, then on to the second">
+        <rect class="unit" x="200" y="10" width="110" height="44" rx="8"/>
+        <text class="lbl" x="255" y="30">Manifold wall</text><text class="sub" x="255" y="44">2/6</text>
+        <rect class="inlet" x="240" y="50" width="12" height="7" rx="2"/><rect class="inlet spare" x="258" y="50" width="12" height="7" rx="2"/>
+        <path class="duct" d="M20 130 H500"/>
+        <circle cx="140" cy="130" r="10" fill="#262626" stroke="#e8e8e8" stroke-width="1.6"/>
+        <circle cx="380" cy="130" r="10" fill="#262626" stroke="#e8e8e8" stroke-width="1.6"/>
+        <path class="cable" d="M246 57 V80 H146 V112 M146 112 V96 H386 V112"/>
+        <text class="acc-t" x="150" y="108">1</text><text class="acc-t" x="390" y="108">1</text>
+      </svg>
+      <p class="note" style="max-width:68ch;margin-top:8px">A bus board draws <b>two chain ports</b> instead of PWM
+        channels. Drop a gate's cable on one and the gate joins the <b>end</b> of that chain; the cable is drawn as the
+        wire runs, port → first gate → next gate (jeff, 2026-11-01), because it is a wire someone strings up and its length
+        is what the bus's reach is judged against. A gate's tab names its chain, never its servo number. Up to six servos
+        a board and one slider; a seventh, or a second slider, is refused with the reason. A chain port appends and never
+        swaps. A gate moved to a PWM board drops its servo number; one recabled between bus boards keeps it (numbers are
+        shop-wide). D-87.</p>
+    </div>
+  </section>
+
+  <hr class="rule"/>
+
   <!-- ══ 6. DECISIONS ════════════════════════════════════════════════ -->
   <section class="sec">
     <h3>6 · Decisions</h3>

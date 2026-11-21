@@ -23,8 +23,10 @@ const ELEMENT_TYPES    = ['collector', 'selector', 'tool', 'junction'];
 const SELECTOR_KINDS   = ['linear', 'servoGate', 'servoManifold'];
 const BRANCH_ROLES     = ['tool', 'unassigned', 'blocked', 'feed'];
 // What a board is flashed to drive. Absent = 'servo', because every board that
-// existed before this field was a PWM board.
-const CONTROLLER_DRIVES = ['servo', 'linear'];
+// existed before this field was a PWM board. 'bus' is the serial-bus board: a chain
+// of ST3215-style servos driving valves, manifolds and at most one slider (it was
+// 'linear' while the only thing on the bus was a slider).
+const CONTROLLER_DRIVES = ['servo', 'bus'];
 
 const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 
@@ -32,7 +34,7 @@ const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 // than a sum. One ESP32 drives EITHER the four-channel PWM servo bank OR a single
 // serial-bus slider — never both, because the two personalities contend for the
 // same pads and firmware/config.h #errors on a pin map that claims both. A board
-// is flashed as one or the other (xiao_c5 vs xiao_c5_linear).
+// is flashed as one or the other (xiao_c5 vs xiao_c5_bus).
 //
 // Reading these as 4+1 is what put a fifth port on every board in the
 // configurator (corrected 2026-08-28). More than the budget on one host is a
@@ -46,6 +48,18 @@ const LINK_TRANSPORTS  = ['wifi-ws', 'esp-now'];
 // may also press a fob (channel 1).
 const MAX_SERVOS_PER_HOST = 2;
 const MAX_LINEAR_PER_HOST = 1;
+// A bus board: how many servos its chains carry, and how many chains leave it. Six
+// is jeff's ceiling (2026-11-01), not the bus's (it addresses 253); it keeps one
+// board's 12 V brick and its one-move-at-a-time queue in reason. Two chains, one each
+// side of the board: the bus is parallel, so a second chain shortens the farthest run.
+const MAX_BUS_SERVOS_PER_HOST = 6;
+const MAX_BUS_CHAINS = 2;
+// Bus servo numbers. Shop-wide, so a servo moved to another board is still known
+// (jeff, 2026-11-01). 1 is every servo's factory number and so means "not yet
+// assigned"; 254 is the bus's broadcast address, and 0 is left alone.
+const BUS_ID_UNASSIGNED = 1;
+const MIN_BUS_ID = 2;
+const MAX_BUS_ID = 253;
 
 // How many outlets ONE sliding gate may serve.
 //
@@ -113,9 +127,9 @@ const MAX_SLIDE_BRANCHES = 8;
  * @property {'primary'|'secondary'} role
  * @property {string} [name]
  * @property {string} [board]
- * @property {'servo'|'linear'} [drives]  what this board is FLASHED to drive:
- *                                   'servo' = the four-channel PWM bank,
- *                                   'linear' = one serial-bus sliding gate.
+ * @property {'servo'|'bus'} [drives]  what this board is FLASHED to drive:
+ *                                   'servo' = the PWM bank,
+ *                                   'bus' = a chain of serial-bus servos.
  *                                   Absent means 'servo' — every board that
  *                                   existed before this field was one.
  *
@@ -130,6 +144,10 @@ const MAX_SLIDE_BRANCHES = 8;
  *                                   The two builds use the same pads and
  *                                   config.h #errors on a pin map claiming both.
  * @property {Link} [link]
+ * @property {string[][]} [chains]   (bus board) the selectors on each chain, in the
+ *                                   order the wire reaches them: up to MAX_BUS_CHAINS
+ *                                   lists. Drawn as wired on the shop layout. A gate
+ *                                   is on at most one; on none = its cable isn't drawn.
  *
  * @typedef {Object} Duct
  * @property {string} child
@@ -144,11 +162,14 @@ const MAX_SLIDE_BRANCHES = 8;
  * @property {'linear'|'servoGate'|'servoManifold'} [kind]  (selector)
  * @property {SelectorState[]} [states]   (selector)
  * @property {Branch[]} [branches]        (selector)
- * @property {Object} [linear]            (selector kind:linear) { channel?, calibration }
+ * @property {Object} [linear]            (selector kind:linear) { channel?, bus?, calibration }
  *                                        channel = which stepper driver (default 0);
  *                                        parallels servo.channel so >1 linear selector
  *                                        is a wiring question, not a model limit
  * @property {Object} [servo]             (selector servo kinds) { channel, moveMs, holdAtRest, ... }
+ *                                        On a bus board, `bus` (MIN_BUS_ID..MAX_BUS_ID) names
+ *                                        the servo in place of `channel`; absent until a servo
+ *                                        has been added for this gate.
  * @property {Object} [sensor]            (tool) { outlet } | { ct }
  * @property {Object} [control]           (collector) { outlet | rf, offDelayMs } — how we
  *                                   SWITCH it. `rf` transmits the remote's own
@@ -289,7 +310,7 @@ const COLLECTOR_BOARD_RULE = (what) =>
 /** The board a collector's clamp, bin and transmitter are on: its controllerId, '' = this board. */
 function collectorBoard(collector) { return (collector && collector.controllerId) || ''; }
 
-function validateTopology(t) {
+function validateTopology(t, opts = {}) {
   /** @type {{code:string,message:string,ref?:string}[]} */
   const errors = [];
   const err = (code, message, ref) => errors.push(ref ? { code, message, ref } : { code, message });
@@ -310,7 +331,7 @@ function validateTopology(t) {
     ctrlIds.add(c.id);
     if (!CONTROLLER_ROLES.includes(c.role)) err('controller', `bad role "${c.role}"`, c.id);
     if (c.drives !== undefined && !CONTROLLER_DRIVES.includes(c.drives))
-      err('controller', `bad drives "${c.drives}" (servo|linear)`, c.id);
+      err('controller', `bad drives "${c.drives}" (servo|bus)`, c.id);
 
     if (c.role === 'primary') primaries++;
     if (c.link !== undefined) {
@@ -395,6 +416,7 @@ function validateTopology(t) {
   const hostServos = new Map();   // controllerId → servo-selector count
   const hostLinear = new Map();   // controllerId → linear-selector count
   const servoChannelOwner = new Map(); // "controllerId channel" → selector id holding it
+  const busIdOwner = new Map();        // bus servo number → selector id (shop-wide)
   for (const sel of selectorsOf(t)) {
     const ref = sel.id;
     if (!SELECTOR_KINDS.includes(sel.kind)) err('selector', `bad kind "${sel.kind}"`, ref);
@@ -443,13 +465,23 @@ function validateTopology(t) {
       if (sv.reversed !== undefined && typeof sv.reversed !== 'boolean')
         err('selector', 'servo.reversed must be a boolean', ref);
       // Two servo selectors on one board sharing a PWM channel would move together.
-      if (sel.controllerId && typeof sv.channel === 'number') {
+      if (sel.controllerId && typeof sv.channel === 'number' && sv.bus === undefined) {
         const key = `${sel.controllerId}\u0000${sv.channel}`;
         if (servoChannelOwner.has(key))
           err('selector', `servo channel ${sv.channel} on host "${sel.controllerId}" `
             + `is already used by "${servoChannelOwner.get(key)}"`, ref);
         else servoChannelOwner.set(key, sel.id);
       }
+    }
+
+    // A bus servo's number: in range, and once in the shop.
+    const busId = (sel.kind === 'linear' ? sel.linear : sel.servo || {})?.bus;
+    if (busId !== undefined) {
+      if (!Number.isInteger(busId) || busId < MIN_BUS_ID || busId > MAX_BUS_ID)
+        err('selector', `bus servo number ${busId} out of range (${MIN_BUS_ID}..${MAX_BUS_ID})`, ref);
+      else if (busIdOwner.has(busId))
+        err('selector', `bus servo ${busId} is already "${busIdOwner.get(busId)}"`, ref);
+      else busIdOwner.set(busId, sel.id);
     }
 
     // branches ↔ non-closed states must be a bijection
@@ -472,24 +504,17 @@ function validateTopology(t) {
 
   // ── per-host actuator budget ──
   //
-  // A host drives the PWM bank OR one serial-bus slider. NEVER BOTH, and never
-  // 4+1: the two personalities use the same pads (bus RX is PWM channel 1), and
-  // firmware/config.h #errors on a pin map that claims both. A board is flashed
-  // as one or the other. So the budget is not "4 servos plus a slider" — that
-  // was a fifth port this model allowed and no hardware can offer.
+  // A PWM board drives MAX_SERVOS_PER_HOST channels and no slider: its bus pads are
+  // PWM pads, and firmware/config.h #errors on a pin map that claims both. A bus
+  // board drives up to MAX_BUS_SERVOS_PER_HOST servos, at most MAX_LINEAR_PER_HOST of
+  // them a slider (its endstops are the board's two inputs). Checked per board below.
+  const drivesOf = new Map(t.controllers.map((c) => [c.id, c.drives || 'servo']));
   for (const [cid, n] of hostServos)
-    if (n > MAX_SERVOS_PER_HOST)
+    if (drivesOf.get(cid) !== 'bus' && n > MAX_SERVOS_PER_HOST)
       err('controller', `host "${cid}" has ${n} servo selectors (max ${MAX_SERVOS_PER_HOST} per host)`, cid);
   for (const [cid, n] of hostLinear)
     if (n > MAX_LINEAR_PER_HOST)
       err('controller', `host "${cid}" has ${n} linear selectors (max ${MAX_LINEAR_PER_HOST} per host)`, cid);
-  for (const [cid, n] of hostLinear) {
-    const servos = hostServos.get(cid) || 0;
-    if (n > 0 && servos > 0)
-      err('controller',
-          `host "${cid}" drives both a sliding gate and ${servos} servo gate(s) — one board does one or the other`,
-          cid);
-  }
   // ── a sliding gate serves at most MAX_SLIDE_BRANCHES outlets ──
   // Counted in BRANCHES (outlets served), not states: the closed state is not an
   // outlet, and it is the duct runs that this ceiling is about.
@@ -505,18 +530,43 @@ function validateTopology(t) {
   // ...and the gates on a board have to match what it was FLASHED to drive.
   // A slider board with a servo gate on it is not a configuration mistake the
   // firmware can work around: those pads are the serial bus.
+  // A bus board carries valves, manifolds and a slider on one chain set; a PWM board
+  // carries servo gates on channels and no slider.
+  const selIndex = new Map(selectorsOf(t).map((s) => [s.id, s]));
   for (const c of t.controllers) {
     const drives = c.drives || 'servo';
     const servos = hostServos.get(c.id) || 0;
     const linear = hostLinear.get(c.id) || 0;
-    if (drives === 'linear' && servos > 0)
-      err('controller',
-          `board "${c.name || c.id}" is set up as a sliding-gate board but has ${servos} servo gate(s) on it`,
-          c.id);
+    const name = c.name || c.id;
     if (drives === 'servo' && linear > 0)
-      err('controller',
-          `board "${c.name || c.id}" is set up as a servo board but has a sliding gate on it`,
-          c.id);
+      err('controller', `board "${name}" is set up as a servo board but has a sliding gate on it`, c.id);
+    if (drives !== 'bus') {
+      if (c.chains !== undefined) err('controller', `board "${name}" has chains but is not a bus board`, c.id);
+      for (const sel of selectorsOf(t))
+        if (sel.controllerId === c.id && (sel.servo || {}).bus !== undefined)
+          err('selector', `"${sel.name || sel.id}" names a bus servo but its board is not a bus board`, sel.id);
+      continue;
+    }
+    if (servos + linear > MAX_BUS_SERVOS_PER_HOST)
+      err('controller', `board "${name}" drives ${servos + linear} servos (max ${MAX_BUS_SERVOS_PER_HOST} per bus board)`, c.id);
+    // Chains: what's on them is this board's and appears once. A gate on none is one whose cable
+    // isn't drawn yet, which is an unfinished layout, not a wrong one.
+    const chains = c.chains === undefined ? [] : c.chains;
+    if (!Array.isArray(chains) || chains.some((ch) => !Array.isArray(ch))) {
+      err('controller', `board "${name}" chains must be a list of lists`, c.id);
+      continue;
+    }
+    if (chains.length > MAX_BUS_CHAINS)
+      err('controller', `board "${name}" has ${chains.length} chains (max ${MAX_BUS_CHAINS})`, c.id);
+    const onChain = new Set();
+    for (const ch of chains) for (const id of ch) {
+      const sel = selIndex.get(id);
+      // Validated as one system of a shop, a chain may name a gate in another system: the shop checks those (shop.js).
+      if (!sel) { if (!opts.partOfShop) err('controller', `board "${name}" chain names "${id}", which is not a gate`, c.id); continue; }
+      else if (sel.controllerId !== c.id) err('controller', `board "${name}" chain names "${id}", which is on another board`, c.id);
+      else if (onChain.has(id)) err('controller', `board "${name}" has "${id}" on its chains twice`, c.id);
+      onChain.add(id);
+    }
   }
 
   // ── outlets: a sense-only plug cannot be a collector's switch ──
@@ -969,6 +1019,8 @@ function redundantSelectors(topology) {
 
 module.exports = {
   MAX_SLIDE_BRANCHES,
+  MAX_SERVOS_PER_HOST, MAX_LINEAR_PER_HOST, MAX_BUS_SERVOS_PER_HOST, MAX_BUS_CHAINS,
+  BUS_ID_UNASSIGNED, MIN_BUS_ID, MAX_BUS_ID, CONTROLLER_DRIVES,
   CONTROLLER_ROLES, ELEMENT_TYPES, SELECTOR_KINDS, BRANCH_ROLES,
   elementIndex, parentDuctIndex,
   collectorOf, collectorBoard, selectorsOf, toolsOf, closedState, servoCommandAngle,

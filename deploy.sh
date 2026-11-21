@@ -320,9 +320,8 @@ DO_FW=true
 DO_FS=true
 DO_PROVISION=true
 FORCE_PROVISION=false
-# Reads nothing at the moment: both places that tested it are commented out
-# (see "0. Save the shop layout"). Kept, along with the flag below, so turning
-# the step back on is uncommenting call sites rather than reconstructing this.
+# Whether to copy the layout off before a filesystem flash and restore it after
+# ("0. Save the shop layout"); --no-topology-backup turns it off.
 DO_TOPO_BACKUP=true
 # Which PlatformIO env to build. Empty = platformio.ini's default_envs (the C5
 # primary). --node switches to the servo-only secondary.
@@ -338,8 +337,7 @@ for arg in "$@"; do
     --fw) DO_UI=false; DO_FS=false ;;
     --no-provision) DO_PROVISION=false ;;
     --provision-only) DO_UI=false; DO_FW=false; DO_FS=false; FORCE_PROVISION=true ;;
-    # Accepted and inert while the backup step is commented out — still parsed
-    # so a script or a habit that passes it doesn't die on "unknown option".
+    # Skip the layout copy-off-and-restore around a filesystem flash.
     --no-topology-backup) DO_TOPO_BACKUP=false ;;
     # A SECONDARY node: servo-only firmware, and no Angular bundle or LittleFS
     # image at all — a node's entire interface is the /nodelink WebSocket, which

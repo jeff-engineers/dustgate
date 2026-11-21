@@ -40,5 +40,7 @@ The root `CLAUDE.md` has the project rules. This file is the UI's.
 - **A machine is ONE box, however many ports it has** (square = primary port, tapered = secondary). It owns no cell.
 - **A tool lives in ONE system; only a SECONDARY port's run may cross the seam**, drawn grey, dashed and thinner. An
   unfinished run's stub is accent orange (`.open-stub`), not grey dashed.
+- **A bus board has two chain ports; its cables are drawn as wired** (port → gate → next gate, `Controller.chains`), a
+  chain port appends and never swaps, and a tab names the chain, never the servo number (D-87, canvas.html 5b).
 - **No duct size anywhere.** **The plug belongs to the tool**, never a port. Where air leaves a gate it is a **port**;
   "outlet" means the smart plug only (D-83).

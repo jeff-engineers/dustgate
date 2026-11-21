@@ -110,8 +110,8 @@ const SERVO_CHANNELS = [0, 1, 2, 3];
         </div>
         <p class="why" *ngIf="!boardOffline && !wrongKindOfBoard && !noBoardCanDrive">
           {{ isServo
-             ? 'Each PWM board drives up to four servo gates, one per channel. A slider board drives none.'
-             : 'A sliding gate needs a board flashed for the serial bus, and that board drives one rack and nothing else.' }}
+             ? 'A PWM board drives two servo gates, one per channel. A bus board drives up to six: draw its cable on the shop layout, then add its servo on the Boards page.'
+             : 'A sliding gate needs a bus board, and each bus board drives one slider.' }}
         </p>
         <!-- The state the picker used to allow silently, and the one in the report
              that started this: a manifold sitting on a slider node. The device
@@ -260,10 +260,11 @@ export class SelectorConfigComponent implements OnInit {
   boardLabel(c: Controller): string {
     const name = `${c.name || c.id}${c.role === 'primary' ? ' (primary)' : ''}`;
     if (!this.canDrive(c)) {
-      return `${name} — ${this.drivesOf(c) === 'linear' ? 'sliding gates only' : 'servo gates only'}`;
+      return `${name} — servo gates only`;
     }
-    if (this.drivesOf(c) === 'linear') {
-      return `${name} — ${this.sliderTaken(c) ? 'its one gate is taken' : 'its one gate is free'}`;
+    if (this.drivesOf(c) === 'bus') {
+      if (!isServoKind(this.sel)) return `${name} — ${this.sliderTaken(c) ? 'its slider is taken' : 'its slider is free'}`;
+      return `${name} — bus servos`;
     }
     const free = this.freeChannels(c);
     return `${name} — ${free ? `${free} of ${this.channels.length} free` : 'no free channel'}`;
@@ -413,7 +414,11 @@ export class SelectorConfigComponent implements OnInit {
     }
     this.working.name = this.name;
     this.working.controllerId = this.controllerId;
-    if (isServoKind(this.working)) this.working.servo.channel = this.channel;
+    if (isServoKind(this.working)) {
+      // A bus board names its servo by number, set by Add a servo; a PWM board by channel. Never both.
+      if (this.selectedIsServoBoard) { this.working.servo.channel = this.channel; delete this.working.servo.bus; }
+      else delete this.working.servo.channel;
+    }
   }
 
   /** Save the wiring on its own.

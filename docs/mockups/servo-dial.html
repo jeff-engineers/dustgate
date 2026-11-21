@@ -1,0 +1,281 @@
+<meta charset="utf-8">
+<title>Servo Rear Dial</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+
+<style>
+  /* Layout: a short note, then the set-home flow as one live phone with a Manifold/Valve switch, the four steps side by
+     side as stills, then the questions. Tokens are the app's own (dustgate-ui/src/styles.css); the app is dark-only. */
+  :root {
+    --bg: #111; --surface: #1e1e1e; --raised: #262626; --border: #2e2e2e; --line: #4a4a46;
+    --text: #e8e8e8; --muted: #8a8a86; --accent: #f0a500; --success: #3cbe6e; --radius: 14px;
+    color-scheme: dark;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); margin: 0;
+         padding-block: 22px 72px; padding-left: max(16px, env(safe-area-inset-left, 0px));
+         padding-right: max(16px, env(safe-area-inset-right, 0px));
+         font-family: system-ui, -apple-system, sans-serif; font-size: 15px; line-height: 1.5; }
+  .wrap { max-width: 1120px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+  .lede { color: var(--muted); font-size: 13.5px; max-width: 72ch; margin-top: 6px; }
+  .eyebrow { font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  .note { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+  .note b { color: var(--text); font-weight: 600; }
+  .sec { display: flex; flex-direction: column; gap: 12px; }
+
+  .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 3px; gap: 3px; }
+  .seg button { background: none; border: 0; color: var(--muted); font: inherit; font-size: 13.5px; padding: 7px 14px; border-radius: 9px; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+  .btn { background: var(--raised); color: var(--text); border: 1px solid var(--border); border-radius: 12px;
+         padding: 9px 14px; font: inherit; font-size: 14px; cursor: pointer; }
+  .btn.primary { background: var(--accent); color: #1a1200; border-color: var(--accent); font-weight: 600; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn:focus-visible, .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .row { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
+  .phone { width: 375px; max-width: 100%; background: var(--bg); border: 1px solid #202225; border-radius: 18px;
+           padding: 16px 16px 20px; flex: none; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .dots { display: flex; gap: 6px; align-items: center; justify-content: center; }
+  .dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+  .dots i.done { background: var(--success); } .dots i.cur { background: var(--accent); }
+  .dots .n { font-size: 12px; color: var(--muted); margin-left: 6px; }
+  .phone h3 { margin: 2px 0 0; font-size: 19px; font-weight: 600; text-align: center; }
+  .phone .sub { color: var(--muted); font-size: 13.5px; text-align: center; max-width: 36ch; }
+  .dial svg { width: 270px; max-width: 100%; height: auto; display: block; }
+  .readout { font-variant-numeric: tabular-nums; font-size: 14px; color: var(--muted); min-height: 21px; }
+  .readout b { color: var(--text); font-size: 18px; }
+  .jog { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; align-self: stretch; }
+  .jog .btn { height: 52px; font-size: 15px; padding: 0; }
+  .tests { display: flex; gap: 8px; align-self: stretch; }
+  .tests .btn { flex: 1; min-width: 0; padding: 10px 6px; font-size: 13.5px; }
+  .tests .btn.at { border-color: var(--success); color: var(--success); }
+  .actions { display: flex; gap: 8px; align-self: stretch; }
+  .actions .btn { flex: 1; height: 50px; }
+  .side { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .spin { width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: s 0.8s linear infinite; display: inline-block; vertical-align: -3px; margin-right: 6px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+  .stills { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 960px) { .stills { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 480px) { .stills { grid-template-columns: 1fr; } }
+  .still { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px 14px;
+           display: flex; flex-direction: column; gap: 6px; }
+  .still svg { width: 100%; max-width: 220px; height: auto; align-self: center; }
+
+  .qs { flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .qs ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 9px; font-size: 13.5px; }
+  .qs li span { color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Mockup · Adjust travel limits · 2026-11-15</div>
+    <h1>Setting home on a bus servo</h1>
+    <p class="lede">The servo is drawn as you see it standing at the gate: from behind, its back toward you, with the
+      flag on the far side showing through (X-ray). The user sets one position, home, by eye. Every other position comes
+      from the gate's design: a manifold turns 71.7° either way from home, and a valve 45° either way. Counter-clockwise
+      means as you see it from behind. Flag and body are to scale from the CAD.</p>
+  </header>
+
+  <section class="sec">
+    <div class="row" style="align-items:center; gap:14px">
+      <h2>Live: walk through it</h2>
+      <div class="seg" role="group" aria-label="Gate type">
+        <button type="button" data-kind="manifold" aria-pressed="true">Manifold</button>
+        <button type="button" data-kind="valve" aria-pressed="false">Valve</button>
+      </div>
+    </div>
+    <div class="row">
+      <div class="phone" id="phone"></div>
+      <div class="qs">
+        <h2>Questions for you</h2>
+        <ol>
+          <li>Does the servo <b>hold</b> at the centre while the flag goes on? <span>Here it holds, so pushing the coupler
+            onto the spline can't turn the shaft. The other choice is to let it go limp and turn it back to centre after.</span></li>
+          <li>The valve's servo is drawn <b>tilted 45° clockwise</b>, with the duct running up and down behind it, so
+            home is half open, open is straight up (45° counter-clockwise) and closed is across (45° clockwise). <span>Is
+            that how the valve sits?</span></li>
+          <li>Manifold home is <b>closed</b>, the flag pointing up between the two legs. <span>Is the left tool the one
+            on your left as you stand behind the servo?</span></li>
+          <li>The check step lets you <b>try each position</b> before Done. <span>Worth keeping, or straight to Done?</span></li>
+          <li>Fine-tune steps are 1° and 5°. <span>The flag goes on the spline in steps of roughly 14°, so the most it
+            ever needs is about 7° either way.</span></li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>The four steps, side by side</h2>
+    <div class="stills" id="stills"></div>
+  </section>
+</div>
+
+<script>
+  // Geometry around the horn centre (0,0), scaled from the CAD renders (2026-11-15): body 104 × 190 with the horn 43
+  // below its top; coupler disc r 59, wider than the body; flag reaches 134, 27 wide at the root and 24 at the tip.
+  // SVG rotate() is clockwise on screen, and the screen IS the rear view, so + here is clockwise as the user sees it.
+  const L = 134;
+  const BODY = 'M-42,-43 H42 L52,-33 V139 Q52,147 44,147 H-44 Q-52,147 -52,139 V-33 Z';
+  const FLAG = `M-13.5,-50 L-12,-${L - 3} L-9,-${L} L9,-${L} L12,-${L - 3} L13.5,-50 Z M-21,40 H21 V68 H-21 Z`;
+  const HOLES = [[0, -34], [34, 0], [0, 34], [-34, 0]];
+
+  const KINDS = {
+    manifold: {
+      name: 'Manifold A', tilt: 0,
+      // display angles relative to the flag at home (straight up)
+      positions: [{ id: 'left', label: 'Table saw', at: -71.7 }, { id: 'closed', label: 'Closed', at: 0 }, { id: 'right', label: 'Band saw', at: 71.7 }],
+      fit: 'Push the flag onto the servo pointing straight up, between the two legs of the duct.',
+      home: 'closed',
+    },
+    valve: {
+      name: 'Drum sander valve', tilt: 45,
+      positions: [{ id: 'open', label: 'Open', at: -45 }, { id: 'closed', label: 'Closed', at: 45 }],
+      fit: 'Push the flag onto the servo pointing straight along it, away from the cable, as drawn. The valve is half open there.',
+      home: null,
+    },
+  };
+
+  let kind = 'manifold', step = 0, flagAt = 0, fitted = false, timer = null, goal = 0;
+  // where the user's first try lands: a spline tooth off
+  const FIT_ERR = { manifold: 9, valve: -6 };
+
+  const rad = (d) => (d * Math.PI) / 180;
+  const at = (d, r) => [r * Math.sin(rad(d)), -r * Math.cos(rad(d))];
+
+  function flag(angle, ghost) {
+    if (ghost) return `<g transform="rotate(${angle})" opacity="0.9"><path d="${FLAG}" fill="none" stroke="var(--text)" stroke-width="1.6" stroke-dasharray="5 4"/><circle r="59" fill="none" stroke="var(--text)" stroke-width="1.6" stroke-dasharray="5 4"/></g>`;
+    return `<g transform="rotate(${angle})"><path d="${FLAG}" fill="var(--accent)"/><circle r="59" fill="var(--accent)"/>
+      <circle r="52" fill="none" stroke="#000" stroke-opacity="0.25"/><circle r="14" fill="#000" fill-opacity="0.2"/>
+      ${HOLES.map(([x, y]) => `<circle cx="${x}" cy="${y}" r="8" fill="var(--bg)"/>`).join('')}</g>`;
+  }
+  function body(tilt) {
+    const ears = [[-43, 34], [43, 34], [-43, 137], [43, 137]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="4" fill="var(--bg)" stroke="var(--line)"/>`).join('');
+    return `<g transform="rotate(${tilt})">
+      <path d="${BODY}" fill="var(--surface)" fill-opacity="0.72" stroke="var(--muted)" stroke-width="1.5"/>
+      <circle r="39" fill="none" stroke="var(--line)" stroke-dasharray="3 3"/>
+      <rect x="-28" y="90" width="56" height="26" rx="4" fill="none" stroke="var(--line)"/>
+      <rect x="-8" y="146" width="16" height="12" rx="2" fill="var(--raised)" stroke="var(--line)"/>${ears}</g>`;
+  }
+  // context behind the gate: the valve's duct, the manifold's indicator marks
+  function backdrop(k) {
+    if (k === 'valve') return `<rect x="-34" y="-165" width="68" height="330" fill="var(--raised)" opacity="0.55"/>
+      <text x="40" y="-150" font-size="10" fill="var(--muted)">duct</text>`;
+    return '';
+  }
+  function marks(k, home) {
+    const K = KINDS[k];
+    return K.positions.map((p) => {
+      const d = home + p.at, [x1, y1] = at(d, 140), [x2, y2] = at(d, 152), [tx, ty] = at(d, 160);
+      return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--success)" stroke-width="2.5" stroke-linecap="round"/>`;
+    }).join('');
+  }
+  function svg(k, opts) {
+    const K = KINDS[k], home = K.tilt;
+    const parts = [backdrop(k)];
+    if (opts.flag === 'under') parts.push(flag(opts.angle, false));
+    parts.push(body(K.tilt));
+    if (opts.flag === 'ghost') parts.push(flag(home, true));
+    if (opts.marks) parts.push(marks(k, home));
+    parts.push(`<circle r="2" fill="var(--text)"/>`);
+    return `<svg viewBox="-170 -170 340 340" role="img" aria-label="Servo seen from behind">${parts.join('')}</svg>`;
+  }
+
+  function sideView() {
+    return `<svg width="150" height="34" viewBox="0 0 150 34" aria-hidden="true">
+      <path d="M6,17 Q16,8 26,17 Q16,26 6,17 Z" fill="none" stroke="var(--muted)"/><circle cx="16" cy="17" r="2.6" fill="var(--muted)"/>
+      <line x1="32" y1="17" x2="56" y2="17" stroke="var(--line)" stroke-dasharray="2 3"/>
+      <rect x="60" y="5" width="34" height="24" rx="3" fill="var(--surface)" stroke="var(--muted)"/>
+      <rect x="94" y="11" width="5" height="12" fill="var(--line)"/>
+      <rect x="99" y="4" width="4" height="26" rx="1.5" fill="var(--accent)"/>
+      <text x="110" y="21" font-size="10" fill="var(--muted)">flag</text></svg><span>You're behind the servo</span>`;
+  }
+
+  const STEPS = ['Centre', 'Fit the flag', 'Line it up', 'Check'];
+  function dots() {
+    return `<div class="dots">${STEPS.map((_, i) => `<i class="${i < step ? 'done' : i === step ? 'cur' : ''}"></i>`).join('')}<span class="n">${step + 1} of 4 · ${STEPS[step]}</span></div>`;
+  }
+  function rel() { const r = Math.round((flagAt - KINDS[kind].tilt) * 10) / 10; return r === 0 ? 'on home' : `${Math.abs(r)}° ${r < 0 ? 'counter-clockwise' : 'clockwise'} of home`; }
+
+  function renderPhone() {
+    const K = KINDS[kind], el = document.getElementById('phone');
+    let h = dots() + `<h3>${K.name}: set home</h3>`;
+    if (step === 0) {
+      h += `<p class="sub">Take the flag off if it's on. The servo turns to the middle of its travel, so there is room
+        both ways, and holds there.</p>
+        <div class="dial">${svg(kind, { flag: 'none' })}</div>
+        <p class="readout">${timer ? '<span class="spin"></span>Turning to the middle…' : 'Ready'}</p>
+        <div class="actions"><button class="btn primary" id="go" ${timer ? 'disabled' : ''}>Turn to the middle</button></div>`;
+    } else if (step === 1) {
+      h += `<p class="sub">${K.fit} It goes on in steps, so get it as close as the teeth allow.</p>
+        <div class="dial">${svg(kind, { flag: 'ghost' })}</div>
+        <div class="side">${sideView()}</div>
+        <div class="actions"><button class="btn" id="back">Back</button><button class="btn primary" id="next">It's on</button></div>`;
+    } else if (step === 2) {
+      h += `<p class="sub">Nudge it until the flag points exactly like the outline, then set home.</p>
+        <div class="dial">${svg(kind, { flag: 'under', angle: flagAt }).replace('</svg>', flag(K.tilt, true) + '</svg>')}</div>
+        <p class="readout"><b>${rel()}</b></p>
+        <div class="jog">
+          <button class="btn" data-j="-5" aria-label="Turn 5 degrees counter-clockwise">⟲ 5°</button>
+          <button class="btn" data-j="-1" aria-label="Turn 1 degree counter-clockwise">⟲ 1°</button>
+          <button class="btn" data-j="1" aria-label="Turn 1 degree clockwise">1° ⟳</button>
+          <button class="btn" data-j="5" aria-label="Turn 5 degrees clockwise">5° ⟳</button>
+        </div>
+        <div class="actions"><button class="btn" id="back">Back</button><button class="btn primary" id="next">Set home</button></div>`;
+    } else {
+      const P = K.positions;
+      h += `<p class="sub">Home is set. Try each position; the flag should land on the marks.</p>
+        <div class="dial">${svg(kind, { flag: 'under', angle: flagAt, marks: true })}</div>
+        <div class="tests">${P.map((p) => `<button class="btn${Math.abs(K.tilt + p.at - flagAt) < 0.5 ? ' at' : ''}" data-p="${p.at}">${p.label}</button>`).join('')}</div>
+        <div class="actions"><button class="btn" id="back">Back</button><button class="btn primary" id="done">Done</button></div>`;
+    }
+    el.innerHTML = h;
+  }
+
+  function animateTo(target, then) {
+    goal = target;
+    clearInterval(timer);
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) { flagAt = target; timer = null; renderPhone(); then && then(); return; }
+    timer = setInterval(() => {
+      const d = goal - flagAt;
+      if (Math.abs(d) < 0.6) { flagAt = goal; clearInterval(timer); timer = null; renderPhone(); then && then(); return; }
+      flagAt += Math.sign(d) * Math.min(Math.abs(d), 2.5);
+      renderPhone();
+    }, 30);
+  }
+
+  document.getElementById('phone').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const K = KINDS[kind];
+    if (b.id === 'go') { timer = 1; renderPhone(); setTimeout(() => { timer = null; step = 1; renderPhone(); }, 1400); }
+    else if (b.id === 'next' && step === 1) { flagAt = K.tilt + FIT_ERR[kind]; step = 2; renderPhone(); }
+    else if (b.id === 'next' && step === 2) { step = 3; renderPhone(); }
+    else if (b.id === 'back') { step = Math.max(0, step - 1); renderPhone(); }
+    else if (b.id === 'done') { step = 0; flagAt = 0; renderPhone(); }
+    else if (b.dataset.j) { flagAt += +b.dataset.j; renderPhone(); }
+    else if (b.dataset.p) animateTo(K.tilt + +b.dataset.p);
+  });
+  document.querySelectorAll('[data-kind]').forEach((b) => b.addEventListener('click', () => {
+    kind = b.dataset.kind; step = 0; flagAt = 0;
+    document.querySelectorAll('[data-kind]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+    renderPhone(); renderStills();
+  }));
+
+  function renderStills() {
+    const K = KINDS[kind], home = K.tilt;
+    const S = [
+      ['1 · Centre', 'The brain turns the servo to the middle of its travel and holds it there. No flag yet.', svg(kind, { flag: 'none' })],
+      ['2 · Fit the flag', 'The outline shows where the flag goes. It only goes on in steps, so close is fine.', svg(kind, { flag: 'ghost' })],
+      ['3 · Line it up', 'The arrows nudge the flag onto the outline. Set home makes that spot the servo\'s new middle.', svg(kind, { flag: 'under', angle: home + FIT_ERR[kind] }).replace('</svg>', flag(home, true) + '</svg>')],
+      ['4 · Check', 'Every other position comes from home. Green marks show where each one lands.', svg(kind, { flag: 'under', angle: home + K.positions[0].at, marks: true })],
+    ];
+    document.getElementById('stills').innerHTML = S.map(([t, d, s]) => `<div class="still"><h2>${t}</h2>${s}<p class="note">${d}</p></div>`).join('');
+  }
+
+  renderPhone(); renderStills();
+</script>
