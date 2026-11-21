@@ -43,6 +43,19 @@ int main() {
   twinMac(odd, twin);
   ok("a multicast bit is cleared, never passed on", twin[0] == 0x3A);
 
+  printf("\nJ6 a signal too weak to join\n");
+  Signal sig;
+  ok("nothing heard is not weak", !sig.weak());
+  sig.heard(-94); sig.heard(-91); sig.heard(-99);
+  ok("the strongest reading is kept", sig.best == -91);
+  ok("-91 dBm is weak", sig.weak());
+  sig.heard(0);
+  ok("0 is not a reading", sig.best == -91);
+  sig.heard(kWeakRssiDbm);
+  ok("the threshold itself is not weak", !sig.weak());
+  sig.reset();
+  ok("a reset forgets it", !sig.weak() && sig.best == kNoRssi);
+
   printf("\n%d/%d passed%s\n", passed, passed + failed, failed ? " — FAILED" : "");
   return failed ? 1 : 0;
 }

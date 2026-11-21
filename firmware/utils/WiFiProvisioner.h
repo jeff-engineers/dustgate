@@ -70,6 +70,7 @@ inline void _applyMac(bool twin) {
                   twin ? "this board's twin MAC" : "this board's own MAC", e == ESP_OK ? "" : " - could not set it, using the driver's");
 }
 static volatile bool s_associated = false;
+static joinplan::Signal s_signal;   // the strongest RSSI heard on a drop, for the failure message
 
 // The DHCP client's own state, read straight out of lwIP while the board waits
 // for an address: which address it was offered, by whom, and whether it is
@@ -386,6 +387,7 @@ inline bool begin() {
                 break;
             case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
                 s_associated = false;
+                s_signal.heard(info.wifi_sta_disconnected.rssi);
                 Serial.printf("\n[WiFi] t=%lums dropped, reason %u (%s), RSSI %d\n", millis(),
                               info.wifi_sta_disconnected.reason,
                               WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason),
@@ -420,6 +422,7 @@ inline bool begin() {
     _applyBandMode();
     _applyMac(twin);
     s_associated = false;
+    s_signal.reset();
     WiFi.begin(ssid.c_str(), pass.c_str());
 
     // 30s, raised from 12s on 2026-09-11.
@@ -505,6 +508,14 @@ inline bool begin() {
                 break;
             case WL_DISCONNECTED:
                 DEBUG_PRINTLN(F(" (STILL TRYING) — found it, never finished associating."));
+                if (s_signal.weak()) {
+                    // Heard, but barely: the drops are frames lost at the edge of reception, and a longer
+                    // timeout only waits longer for the same thing (joinplan::kWeakRssiDbm).
+                    Serial.printf("       The signal is far too weak: %d dBm at best (a board on the bench\n"
+                                  "       reads -40 to -70). Check the ANTENNA: is it on the U.FL\n"
+                                  "       connector and clicked home? Then move closer to the router.\n", s_signal.best);
+                    break;
+                }
                 DEBUG_PRINTLN(F("       A slow or busy AP. Raising joinplan::kAssocTimeoutMs is"));
                 DEBUG_PRINTLN(F("       the honest fix if this is repeatable."));
                 // Status 6 is also what a board with NO ANTENNA reports (the

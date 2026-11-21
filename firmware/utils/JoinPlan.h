@@ -51,6 +51,21 @@ struct Attempt {
     }
 };
 
+// The strongest signal heard while joining, from the RSSI the driver reports on each drop. Below kWeakRssiDbm the
+// board is hearing the router at the edge of reception, so AUTH_EXPIRE / ASSOC_EXPIRE mean frames are not getting
+// through, and the cause is almost always a missing or unseated antenna, not a slow router (2026-11-21: every drop
+// at -91 to -99 dBm, nothing on the U.FL). The failure message says that instead of "raise the timeout".
+constexpr int kWeakRssiDbm = -85;
+constexpr int kNoRssi = -128;   // nothing heard yet
+
+struct Signal {
+    int best = kNoRssi;
+    void reset() { best = kNoRssi; }
+    // 0 and above is the driver's "not measured", never a reading.
+    void heard(int rssi) { if (rssi < 0 && rssi > best) best = rssi; }
+    bool weak() const { return best != kNoRssi && best < kWeakRssiDbm; }
+};
+
 // A board's other MAC: its own with the locally administered bit set (bit 1 of
 // the first byte), multicast bit left clear. The same twin every time, so the
 // router sees one stable second device rather than a new one per boot.
