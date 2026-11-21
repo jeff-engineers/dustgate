@@ -108,6 +108,9 @@ static void help() {
         "  zero             reset the tracked across-turns position to 0 (it wraps; we count)\n"
         "  stepdump <n> [ms]  step, and stream the raw position through the move — what does it DO?\n"
         "  timeit <pos> [spd]  move there and time it, in counts/s and rpm — measures what 46 means\n"
+        "  stallhome <+1|-1> [limit%] [spd] [n] [backoff mm]\n"
+        "                   stepmode: seat against a hard stop at a capped torque (25%), then n times (10) back off\n"
+        "                   (20 mm) and drive in again; prints the spread. A switchless datum test. TURNS.\n"
         "\n"
         "  suite            run every check, print PASS/FAIL and a baseline. THE SHAFT TURNS.\n"
         "\n"
@@ -722,6 +725,180 @@ static void doDump(uint8_t addr, uint8_t len) {
 }
 
 // -----------------------------------------------------------------------------
+// STALL HOMING (2026-11-17): can the slider's hard stop BE the datum, with no switch?
+//
+// In step mode the servo forgets where it is at every power cycle, which is the whole job of the endstops. A rigid
+// stop at the end of the rail could do it instead: drive into it at a LOWERED TORQUE LIMIT and call "the step count
+// stopped falling with steps still to go" the datum. That is the slider driver's own stall test (kStallPolls in
+// ST3215LinearDriver.cpp), a distance test, not a load threshold — load moves with speed and supply.
+//
+// What this measures, and nothing decides on it yet:
+//   - repeatability: seat against the stop, then n times back off a fixed distance and drive back in. Each approach
+//     should travel the back-off exactly; the spread across approaches is how repeatable the datum is.
+//   - whether the capped torque still latches the servo's overload (the blinking LED of 2026-08-28), via the status byte.
+//   - whether the torque limit register (48) takes, and whether the torque cycle — the only cancel step mode has —
+//     puts it back to full. It is re-read after every cancel and re-written if it moved.
+//   - the switches' state at each stall, if they are wired, to compare the stall point with where they trip.
+// A key press aborts. The original torque limit is restored at the end, however it ends.
+// -----------------------------------------------------------------------------
+static const uint8_t kStallHomePolls = 5;       // as the driver: 5 polls of 20 ms with no progress
+static const long    kStallHomeArrived = 8;     // a step command settles 3-4 short; this little left is arrival
+
+static bool keyPressed() {
+    if (!Serial.available()) return false;
+    while (Serial.available()) Serial.read();
+    return true;
+}
+
+// Step mode's only cancel (see stop() in ST3215LinearDriver.cpp): a new step command does not supersede one in flight.
+static void cancelSteps() {
+    bus.write8(target, ST_REG_TORQUE_ENABLE, 0);
+    delay(20);
+    bus.write8(target, ST_REG_TORQUE_ENABLE, 1);
+}
+
+struct Approach {
+    enum End { ARRIVED, STALLED, TIMEOUT, ABORTED, LOST } end = LOST;
+    long    carry = 0;        // register 56 before the command: a leftover from the last one would skew `travelled`
+    long    travelled = 0;    // counts the servo reports it turned
+    int16_t peakLoad = 0, endLoad = 0;
+};
+static const char* endName(Approach::End e) {
+    return e == Approach::ARRIVED ? "ran out" : e == Approach::STALLED ? "STALLED" : e == Approach::TIMEOUT ? "timeout"
+         : e == Approach::ABORTED ? "aborted" : "bus lost";
+}
+
+// `steps` signed: positive sets bit 15 (doStep's convention). Watches register 56 until it stops falling.
+static Approach runSteps(long steps, uint16_t speed) {
+    Approach a;
+    const long want = min(labs(steps), 32767L);
+    uint16_t raw = (uint16_t)want;
+    if (steps > 0) raw |= 0x8000;
+    uint16_t before = 0;
+    if (bus.read16(target, ST_REG_PRESENT_POS, &before)) a.carry = before & 0x7FFF;
+    if (!bus.moveTo(target, raw, speed)) return a;
+
+    // A fault backstop only (completion is distance): three times the distance over the speed, plus 3 s.
+    const uint32_t limitMs = 3000UL * (uint32_t)want / speed + 3000;
+    const uint32_t t0 = millis();
+    long last = -1;
+    uint8_t still = 0, misses = 0, polls = 0;
+    bool progress = false;
+    while (true) {
+        if (keyPressed()) { a.end = Approach::ABORTED; break; }
+        if (millis() - t0 > limitMs) { a.end = Approach::TIMEOUT; break; }
+        delay(20);
+        uint16_t r = 0, ld = 0;
+        if (!bus.read16(target, ST_REG_PRESENT_POS, &r)) { if (++misses >= 5) { a.end = Approach::LOST; break; } continue; }
+        misses = 0;
+        if (polls < 255) polls++;
+        const long rem = r & 0x7FFF;
+        if (bus.read16(target, ST_REG_PRESENT_LOAD, &ld)) {
+            a.endLoad = signedLoad(ld);
+            if (abs(a.endLoad) > abs(a.peakLoad)) a.peakLoad = a.endLoad;
+        }
+        if (last >= 0 && rem < last) { progress = true; still = 0; } else if (last >= 0) still++;
+        last = rem;
+        // Already against the stop never shows progress, so after half a second stillness alone counts.
+        if (rem <= 3 || (still >= kStallHomePolls && (progress || polls >= 25))) {
+            a.end = rem <= kStallHomeArrived ? Approach::ARRIVED : Approach::STALLED;
+            break;
+        }
+    }
+    a.travelled = last < 0 ? 0 : want - last;
+    if (a.end != Approach::ARRIVED) cancelSteps();
+    return a;
+}
+
+static void printSwitches() {
+#ifdef PIN_ENDSTOP_HOME
+    // NC to GND with a pull-up: HIGH is triggered, and also no switch wired at all.
+    Serial.printf("  switches: D8 %s, D9 %s\n", digitalRead(PIN_ENDSTOP_HOME) ? "HIGH" : "low",
+                  digitalRead(PIN_ENDSTOP_MAX) ? "HIGH" : "low");
+#endif
+}
+
+// Re-read the limit after a cancel; if the torque cycle reset it, say so and put it back.
+static void holdTorqueLimit(uint16_t limit) {
+    uint16_t now = 0;
+    if (!bus.read16(target, ST_REG_TORQUE_LIMIT, &now)) { Serial.println(F("  (couldn't re-read the torque limit)")); return; }
+    if (now == limit) return;
+    Serial.printf("  the torque cycle put the limit to %u — writing %u again\n", now, limit);
+    bus.write16(target, ST_REG_TORQUE_LIMIT, limit);
+}
+
+static void printStatus() {
+    uint8_t err = 0;
+    if (bus.ping(target, &err) && (err & 0x20)) Serial.println(F("  ⚠ OVERLOAD latched in the status byte"));
+}
+
+static void doStallHome(int dir, int pct, uint16_t speed, int n, float backoffMm) {
+    if (dir != 1 && dir != -1)  { Serial.println(F("  stallhome <+1|-1> [limit% 25] [speed] [n 10] [backoff mm 20]")); return; }
+    if (pct < 5 || pct > 100)   { Serial.println(F("  limit is 5..100 percent")); return; }
+    if (speed == 0)             { Serial.println(F("  speed 0 is FULL speed on this part, not stop — give a number")); return; }
+    if (!requireStepMode("stallhome")) return;
+    uint8_t torque = 0;
+    if (!bus.read8(target, ST_REG_TORQUE_ENABLE, &torque) || !torque) { Serial.println(F("  torque is OFF: `torque on` first")); return; }
+
+    uint16_t original = 0;
+    if (!bus.read16(target, ST_REG_TORQUE_LIMIT, &original)) { fail("read torque limit"); return; }
+    const uint16_t limit = (uint16_t)(pct * 10);
+    uint16_t took = 0;
+    if (!bus.write16(target, ST_REG_TORQUE_LIMIT, limit) || !bus.read16(target, ST_REG_TORQUE_LIMIT, &took) || took != limit) {
+        Serial.printf("  torque limit did not take (wrote %u, reads %u) — not driving into anything\n", limit, took);
+        bus.write16(target, ST_REG_TORQUE_LIMIT, original);
+        return;
+    }
+    const long backoff = lroundf(backoffMm * ST3215_COUNTS_PER_MM);
+    // Each approach is asked for the back-off plus 10 mm: a stop that is not there within that is a finding, not a
+    // reason to keep driving.
+    const long reach = backoff + lroundf(10 * ST3215_COUNTS_PER_MM);
+    Serial.printf("  limit %u (was %u), speed %u, back-off %ld counts (%.1f mm). Any key aborts.\n",
+                  limit, original, speed, backoff, backoffMm);
+
+    // Seat: up to the longest rail the driver allows. Nothing is counted from this one.
+    Serial.println(F("  seating against the stop..."));
+    Approach a = runSteps(dir * lroundf(HOMING_MAX_TRAVEL_MM * ST3215_COUNTS_PER_MM), speed);
+    Serial.printf("  seat: %s after %ld counts, peak load %d, at the stop %d\n", endName(a.end), a.travelled, a.peakLoad, a.endLoad);
+    printSwitches();
+    printStatus();
+    holdTorqueLimit(limit);
+
+    long lo = LONG_MAX, hi = LONG_MIN, sum = 0;
+    int got = 0;
+    if (a.end == Approach::STALLED) {
+        Serial.println(F("   #  back-off       approach  carry  peak  at-stop"));
+        for (int i = 1; i <= n; i++) {
+            Approach b = runSteps(-dir * backoff, speed);
+            if (b.end != Approach::ARRIVED) {
+                Serial.printf("  back-off %d %s after %ld counts — stopping\n", i, endName(b.end), b.travelled);
+                break;
+            }
+            Approach c = runSteps(dir * reach, speed);
+            Serial.printf("  %2d  %5ld %-7s  %5ld %-7s  %5ld  %4d  %4d\n", i, b.travelled, endName(b.end),
+                          c.travelled, endName(c.end), c.carry, c.peakLoad, c.endLoad);
+            if (c.end != Approach::STALLED) { Serial.println(F("  no stop where the last one was — stopping")); break; }
+            printStatus();
+            holdTorqueLimit(limit);
+            lo = min(lo, c.travelled); hi = max(hi, c.travelled); sum += c.travelled; got++;
+        }
+        printSwitches();
+    } else {
+        Serial.println(F("  no stall to seat against — nothing to repeat"));
+    }
+
+    bus.write16(target, ST_REG_TORQUE_LIMIT, original);
+    uint16_t back = 0;
+    bus.read16(target, ST_REG_TORQUE_LIMIT, &back);
+    Serial.printf("  torque limit restored to %u%s\n", back, back == original ? "" : " — NOT what it was");
+    if (got) {
+        Serial.printf("  %d approaches: mean %.1f counts (%.2f mm), spread %ld counts = %.2f mm\n", got,
+                      (float)sum / got, (float)sum / got / ST3215_COUNTS_PER_MM, hi - lo, (hi - lo) / ST3215_COUNTS_PER_MM);
+        Serial.println(F("  each approach should equal its back-off; the spread is the datum's repeatability"));
+    }
+}
+
+// -----------------------------------------------------------------------------
 // HOW HARD IS THE GATE, AND HOW FAR CAN THE WIRE GO (2026-10-29)
 //
 // Two questions the bus-servo chain design waits on (docs/mockups/bus-chain.html):
@@ -1303,6 +1480,14 @@ static void handle(const String& line) {
         return;
     }
     if (cmd == "suite")  { doSuite(); return; }
+    if (cmd == "stallhome") {
+        doStallHome((int)arg(line,1).toInt(),
+                    arg(line,2).length() ? (int)arg(line,2).toInt() : 25,
+                    arg(line,3).length() ? (uint16_t)arg(line,3).toInt() : (uint16_t)HOMING_SPEED_STEPS_PER_SEC,
+                    arg(line,4).length() ? (int)arg(line,4).toInt() : 10,
+                    arg(line,5).length() ? arg(line,5).toFloat() : 20.0f);
+        return;
+    }
     if (cmd == "cycle") {
         if (!arg(line,2).length()) { Serial.println(F("  cycle <a> <b> [n] [speed]")); return; }
         doCycle((uint16_t)arg(line,1).toInt(), (uint16_t)arg(line,2).toInt(),
@@ -1358,6 +1543,10 @@ void setup() {
     while (!Serial && (int32_t)(millis() - until) < 0) delay(10);
 
     bus.begin(busBaud);
+#ifdef PIN_ENDSTOP_HOME
+    pinMode(PIN_ENDSTOP_HOME, INPUT_PULLUP);   // read only, by `stallhome`, to compare a stall with the switches
+    pinMode(PIN_ENDSTOP_MAX, INPUT_PULLUP);
+#endif
     banner();
     // The supply, said at once: a servo on 5 V answers every read and simply does not turn, which looks like a jam.
     uint8_t volt = 0;

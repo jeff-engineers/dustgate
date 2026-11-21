@@ -173,6 +173,12 @@ node — its servos share one brick, and the wire-length limit assumes only the 
   4. **Home** (a valve's encoder is absolute within a turn; no sweep): turn the valve by hand to closed with `torque off`,
      `sethome`, power-cycle the servo, `read` — it should say 2048. `sethome` is Feetech's documented "write 128 to the
      torque register", not yet confirmed on our ST3215; the command reads back and says whether it took.
+  5. **Can a hard stop replace the slider's endstops?** (2026-11-17, compiled only.) A rigid block at each rail end,
+     `stepmode on` + power-cycle + `torque on`, then `stallhome -1` (and `+1` for the far end): seats against the stop at
+     25 % torque, backs off 20 mm and drives in again 10 times, and prints the spread. Note: the spread (under ~0.5 mm =
+     switches could go), any OVERLOAD line, whether the torque cycle resets the limit, and where the stall falls against
+     the switches' trip. Repeat at 9 V and at 15 % / 40 %. If it holds, the span check (`(N−1)×pitch` + margins) is
+     what tells a jam from the stop.
 
 ## Later
 
