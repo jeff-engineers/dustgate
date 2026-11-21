@@ -557,6 +557,10 @@ svg.canvas, svg.canvas text { -webkit-user-select: none; user-select: none; }
 .board-role { fill: var(--muted); font-size: 7.5px; letter-spacing: 0.12em;
               font-family: ui-monospace, Menlo, monospace; }
 .board.primary .board-role { fill: var(--accent); }
+/* A board the layout still uses but the brain has no pairing for (2026-11-21): dashed, like hardware that is not there,
+   and its role line in the attention orange, since its gates cannot move until a board is paired under its name. */
+.board.unpaired .board-body { stroke-dasharray: 5 4; }
+.board.unpaired .board-role { fill: var(--accent); }
 .board-count { fill: var(--muted); font-size: 8.5px; text-anchor: end;
                font-family: ui-monospace, Menlo, monospace; }
 .board-count.full { fill: var(--accent); }

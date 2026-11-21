@@ -16,7 +16,9 @@
  */
 
 // The budget, not a literal: this said "four" for a month after boards dropped to two channels (2026-10-17).
-import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
+import { SERVO_CHANNELS_PER_BOARD, selectorsOnController } from '../gates/selector-types';
+import type { Topology } from '@topology';
+import { clampUsers, collectorOf, systemsOf, type ShopDoc } from '../services/shop-doc';
 
 export type Drives = 'servo' | 'bus';
 
@@ -135,9 +137,39 @@ export function shortfallText(s: PortShortfall): string {
  *
  * It says what SURVIVES as well as what goes. "Unpair" sounds destructive to
  * someone who has just spent an evening provisioning WiFi, and the board keeps
- * every bit of that — this shop simply stops listing it.
+ * every bit of that — this shop simply stops listing it. When the layout still
+ * points at the board, it names what stays and the two ways to pick it up again.
  */
-export function unpairPrompt(name: string): string {
-  return `Unpair ${name}? The board stays powered and keeps its WiFi, `
-       + `but this shop forgets it. Pair it again from Boards.`;
+export function unpairPrompt(name: string, host: string, uses: BoardUses): string {
+  const base = `Unpair ${name}? The board stays powered and keeps its WiFi, but this shop forgets it.`;
+  const users = [...(uses.gates ? [uses.gates === 1 ? 'its gate' : `its ${uses.gates} gates`] : []), ...uses.others];
+  if (!users.length) return `${base} Pair it again from Boards.`;
+  const list = users.length === 1 ? users[0] : `${users.slice(0, -1).join(', ')} and ${users[users.length - 1]}`;
+  const many = users.length > 1 || uses.gates > 1;
+  return `${base} It stays on the layout, not paired, because ${list} still ${many ? 'use' : 'uses'} it. `
+       + `Pair a board flashed as ${host} to pick it up again, or move ${many ? 'them' : 'it'} to another board `
+       + `and delete this one on the canvas.`;
 }
+
+/** What on the layout points at a board: the gates it drives, and by name every machine or collector whose clamp, or
+ *  whose collector control, is on it. */
+export interface BoardUses { gates: number; others: string[] }
+
+/**
+ * Unpairing any board, whatever its state (jeff, 2026-11-12: "forget a node, regardless of whether it's online, dead,
+ * or offline"). A board the layout still points at keeps its controller entry, shown as not paired, rather than
+ * leaving gates, clamps or a collector naming a board that isn't there — which the validator rejects, so the save
+ * would fail. Pairing a board under the same host picks them back up, since a node's host IS its controllerId.
+ */
+export function boardUses(t: Topology | null | undefined, id: string): BoardUses {
+  if (!t) return { gates: 0, others: [] };
+  const doc = t as unknown as ShopDoc;
+  const others = new Set(clampUsers(doc, id));
+  for (const sys of systemsOf(doc)) {
+    const dc = collectorOf(sys);
+    if (dc && dc['controllerId'] === id) others.add((dc['name'] as string) || 'the collector');
+  }
+  return { gates: selectorsOnController(t, id).length, others: [...others] };
+}
+
+export const boardInUse = (u: BoardUses): boolean => u.gates > 0 || u.others.length > 0;

@@ -332,7 +332,7 @@
       </g>
 
       <!-- A board stands on a cell like any other piece, and drags like one. -->
-      <g *ngFor="let b of boards()" class="board" [class.primary]="b.primary"
+      <g *ngFor="let b of boards()" class="board" [class.primary]="b.primary" [class.unpaired]="isUnpairedBoard(b.id)"
          [class.dragging]="!!b.dragX"
          [class.bad]="!!b.dragX && !!dropBlocked"
          [attr.transform]="'translate(' + bx(b) + ',' + by(b) + ')'"
@@ -343,7 +343,7 @@
         <!-- Hidden while its field is on top of it, same as a piece's label. -->
         <text class="board-name" *ngIf="renamingBoard !== b.id"
               [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 19">{{ b.name }}</text>
-        <text class="board-role" [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 33">{{ b.primary ? 'PRIMARY' : 'SECONDARY' }}</text>
+        <text class="board-role" [attr.x]="-BOARD_W/2 + 8" [attr.y]="-BOARD_H/2 + 33">{{ b.primary ? 'PRIMARY' : isUnpairedBoard(b.id) ? 'NOT PAIRED' : 'SECONDARY' }}</text>
         <!-- The port count IS the hardware budget, and the budget depends on what
              the board is flashed to drive: four PWM channels, or ONE sliding
              gate. Never 4+1 — those are the same pads. Amber when it's full: the

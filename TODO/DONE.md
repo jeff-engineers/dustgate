@@ -14,6 +14,12 @@ of this file is being able to answer "did we already decide this, and why".
 
 Newest first.
 
+- **Unpair any board, whatever its state — LANDED 2026-11-21.** Unpair is never greyed. The brain forgets the board; a board
+  the layout still uses (gates, a clamp, a collector: `boardUses()`) stays drawn as NOT PAIRED with its gates still wired, and
+  pairing a board flashed under the same name picks them back up. An unpaired board nothing uses gets *Delete board* on the
+  canvas. Board-less gates were the rejected alternative (`controllerId` optional through model, brain, routing and canvas).
+  Not run on hardware.
+
 - **The slider page's Try again and lock — LANDED 2026-10-17 (PR #33), run on the bench 2026-10-18.** A failed home leaves
   the arrows and Capture greyed with the node's own reason and a Try again button; after an endstop rewire, Try again homed
   and swept the slider through the Pi brain.

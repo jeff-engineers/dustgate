@@ -43,7 +43,7 @@ import { fitText, plugLabel } from './plug-label';
 import {
   type Drives, type PortShortfall, DEFAULT_DRIVES, applyDrivesCache, canHost, drivesFromCaps,
   drivesFromHasLinear, portShortfalls, resolveDrives, shortfallText,
-  unpairPrompt,
+  unpairPrompt, boardUses, boardInUse,
 } from '../boards/board-drives';
 import {
   PORT_H, PORT_W, SERVO_PORTS, TAB_H, TAB_W, BUS_CHAIN_PORT, isChainPort,
@@ -2746,9 +2746,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    *  Boards screen until 2026-09-07, which made unpairing a board effectively
    *  undiscoverable: nothing in the app's navigation points at /boards either.
    *
-   *  Greyed while gates still name the board, for the reason the Boards screen gives:
-   *  a gate pointing at a controller that doesn't exist fails validation on save, and
-   *  reads as a mysterious save failure rather than a clear reason.
+   *  Offered whatever the board's state (2026-11-12). A board the layout still uses
+   *  stays drawn, marked NOT PAIRED, with its gates still wired to it (boardUses()).
+   *  Once nothing uses an unpaired board, the same row becomes "Delete board": there
+   *  is no hardware left to forget, only a drawn piece.
    *
    *  Nor "take off the canvas". Every paired board is placed by construction
    *  (`ensureBoardCells`), and that is what lets the empty-cell menu stay this short:
@@ -2756,6 +2757,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private boardOptions(id: string): MenuOption[] {
     const systems = systemsOf(this.topo as unknown as ShopDoc);
     const gates = this.topo ? selectorsOnController(this.topo, id).length : 0;
+    const unpaired = this.isUnpairedBoard(id);
+    const inUse = boardInUse(boardUses(this.topo, id));
     return [
       { kind: 'rename', label: 'Rename', enabled: true },
       { kind: 'moveSystem', label: 'Move to system…', enabled: systems.length > 1,
@@ -2764,9 +2767,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // A bus board's servos are added here too (jeff, 2026-11-01): it is where the gate was just cabled to it.
       ...(this.isBusBoard(id) ? [{ kind: 'addServo' as const, label: 'Add a servo…', enabled: gates > 0,
             note: gates ? 'one new servo at a time' : 'cable a gate to it first' }] : []),
-      { kind: 'unpairBoard', label: 'Unpair board…', enabled: gates === 0,
-        note: gates ? `drives ${gates} ${gates === 1 ? 'gate' : 'gates'}` : undefined },
+      unpaired
+        ? { kind: 'unpairBoard', label: 'Delete board', enabled: !inUse, note: inUse ? 'still in use' : 'not paired' }
+        : { kind: 'unpairBoard', label: 'Unpair board…', enabled: true,
+            note: gates ? `its ${gates} ${gates === 1 ? 'gate stays' : 'gates stay'}` : undefined },
     ];
+  }
+
+  /** A board on the layout that the brain has no pairing for. False until the paired list has loaded, so a failed or
+   *  slow read never marks every board as unpaired. The primary is the brain's own board and always counts as paired. */
+  isUnpairedBoard(id: string): boolean {
+    if (!this.nodeLinksLoaded) return false;
+    const c = this.controllersRaw().find(x => x['id'] === id);
+    if (!c || c['role'] === 'primary') return false;
+    return !this.nodeLinks.some(l => l.id === id);
   }
 
   /** The systems a board can be drawn beside.
@@ -3689,6 +3703,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** The paired nodes' last reported state, kept so the port strip can be drawn
    *  from what each board SAYS it drives rather than from a cached guess. */
   private nodeLinks: NodeLinkState[] = [];
+  /** True once the paired list has been read: until then no board is shown as not paired. */
+  private nodeLinksLoaded = false;
 
   private async mergePairedBoards(): Promise<void> {
     if (!this.topo) return;
@@ -3696,6 +3712,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     try { links = await this.api.getNodes(); }
     catch (e) { reportFailure('Canvas · paired boards', e, '(boards drawn from the layout only)'); return; }
     this.nodeLinks = links;
+    this.nodeLinksLoaded = true;
     // Which boards carry a clamp — a separate read because it needs `self` too,
     // and the primary is not in `nodes` (that array is the REMOTE links). A
     // failure leaves the list empty, which is the same as a shop with no clamps
@@ -3902,7 +3919,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /**
-   * Forget a board: unpair it on the device, then drop its controller from the doc.
+   * Forget a board: unpair it on the device, and drop its controller from the doc unless the layout still uses it.
    *
    * Confirmed rather than undoable. Every other canvas menu action is a pure
    * document edit, which is what lets undo be a whole-document snapshot
@@ -3912,36 +3929,52 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
    * an older snapshot still holds this controller, and stepping back onto one would
    * resurrect a board that isn't there. Losing the undo stack is the smaller harm.
    *
-   * The gate count is recomputed HERE rather than read off the greyed menu row, for
-   * the same reason the Boards screen does it: the row is a render-time snapshot,
-   * and acting on a stale one unpairs a board that still drives gates.
+   * A board the layout still uses (boardUses()) stays drawn, marked NOT PAIRED, its gates still wired to it: pairing a
+   * board under the same host picks them back up. An unpaired board nothing uses is deleted instead — a pure document
+   * edit with an undo point, since there is no pairing left to disagree with.
    */
   private async unpairBoard(id: string): Promise<void> {
     if (!this.topo) return;
     const name = this.boardName(id);
-    const gates = selectorsOnController(this.topo, id).length;
-    if (gates > 0) {                                  // the greyed row is the affordance; this is the guard
-      this.saveError = `${name} still drives ${gates} ${gates === 1 ? 'gate' : 'gates'}. `
-                     + `Move ${gates === 1 ? 'it' : 'them'} to another board first.`;
+    const uses = boardUses(this.topo, id);          // recomputed on the click, not read off the render-time row
+    if (this.isUnpairedBoard(id)) {
+      if (boardInUse(uses)) { this.saveError = `${name} is still in use. Move what it drives to another board first.`; return; }
+      this.pushHistory(null);
+      this.dropBoard(id);
+      await this.save();
+      if (!this.saveError) this.saveNote = `${name} deleted.`;
       return;
     }
     const c = this.controllersRaw().find(x => x['id'] === id);
     const host = (c?.['link'] as { host?: string } | undefined)?.host;
     if (!host) { this.saveError = `${name} has no hostname to unpair — use Board setup.`; return; }
-    if (!window.confirm(unpairPrompt(name))) return;
+    if (!window.confirm(unpairPrompt(name, host, uses))) return;
     this.saveError = ''; this.saveNote = '';
     try { await this.api.unpairNode(host); }
     catch (e) { this.saveError = reportFailure('Canvas · unpair a board', e, `${name} is still paired — ${failureReason(e)}.`); return; }
+    this.nodeLinks = this.nodeLinks.filter(l => l.id !== id);
+    this.past.length = 0; this.future.length = 0;     // see the note above
+    if (boardInUse(uses)) {
+      this.refreshHandles();
+      this.saveNote = `${name} unpaired. It stays on the layout until you pair a board flashed as ${host} or move what it drives.`;
+      return;
+    }
+    this.dropBoard(id);
+    await this.save();
+    if (!this.saveError) this.saveNote = `${name} unpaired.`;
+  }
+
+  /** Take a board's controller and its cell out of the doc and redraw. */
+  private dropBoard(id: string): void {
+    if (!this.topo) return;
     const controllers = this.controllersRaw();
     const i = controllers.findIndex(x => x['id'] === id);
     if (i >= 0) controllers.splice(i, 1);
     this.boardCells.delete(id);
-    this.past.length = 0; this.future.length = 0;     // see the note above
     this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
     this.dirty = true;
-    await this.save();
-    if (!this.saveError) this.saveNote = `${name} unpaired.`;
   }
+
 
   /** Redraw a board beside a different system.
    *

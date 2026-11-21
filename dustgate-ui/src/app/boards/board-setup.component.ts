@@ -17,6 +17,8 @@ import { busServoLines, type BusServoLine } from './bus-servos';
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
   unpairPrompt,
+  boardUses,
+  boardInUse,
 } from './board-drives';
 import {
   Controller, SERVO_CHANNELS_PER_BOARD,
@@ -266,8 +268,7 @@ interface BoardRow {
                     (click)="update(r)"
                     [disabled]="!!bulk"
                     title="The board pulls the new firmware from the brain and restarts. It is away for a few seconds; its gates close if that runs past the fail-closed delay">Update</button>
-            <button class="act" *ngIf="!r.primary"
-                    [disabled]="r.gates > 0" (click)="remove(r)">Unpair</button>
+            <button class="act" *ngIf="!r.primary" (click)="remove(r)">Unpair</button>
           </ng-container>
           <ng-template #renameActions>
             <button class="act add" (click)="commitRename()">Save</button>
@@ -309,10 +310,6 @@ interface BoardRow {
         </div>
       </div>
     </div>
-
-    <p class="note" *ngIf="blockedRemoval">
-      {{ blockedRemoval }}
-    </p>
 
     <!-- Discovery -->
     <p class="sec-title">Add another board</p>
@@ -369,7 +366,6 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   scanning = false;
   scanned = false;
   error = '';
-  blockedRemoval = '';
   renaming: string | null = null;
   renameText = '';
   /** The WiFi network the controller is joined to. Empty while it's running its
@@ -533,33 +529,14 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     this.rebuild();
   }
 
-  /** Unbind a board. Blocked while gates still name it — removing it would leave
-   *  them pointing at a controller that doesn't exist, which the schema rejects
-   *  ("controllerId does not resolve") and reads as a mysterious save failure
-   *  rather than a clear reason.
-   *
-   *  The count is recomputed HERE rather than trusted from the row: the row is a
-   *  render-time snapshot, and acting on a stale one silently unbinds a board
-   *  that still has gates. The disabled button is the affordance; this is the
-   *  actual guard. */
+  /** Unpair a board, whatever its state. The brain forgets it; the layout keeps its entry while anything still points
+   *  at it (boardUses()), so its gates are not left naming a board that doesn't exist. */
   async remove(r: BoardRow): Promise<void> {
-    // Recomputed here rather than trusted from the row: the row is a render-time
-    // snapshot, and acting on a stale one unpairs a board that still drives gates.
-    // The disabled button is the affordance; this is the guard.
-    const gates = this.topo ? selectorsOnController(this.topo, r.id).length : 0;
-    if (gates > 0) {
-      this.blockedRemoval =
-        `${r.name} still drives ${gates} ${gates === 1 ? 'gate' : 'gates'}. ` +
-        `Move ${gates === 1 ? 'it' : 'them'} to another board first.`;
-      this.rebuild();
-      return;
-    }
-    this.blockedRemoval = '';
-    // Confirmed here as well as on the canvas. This screen used to unpair on a
-    // single click while the canvas asked first, which is the wrong way round: a
-    // row of boards with Rename beside Unpair is the easier of the two to hit by
-    // accident, and neither is undoable.
-    if (!window.confirm(unpairPrompt(r.name))) return;
+    // What the layout points at, recomputed on the click rather than read off the render-time row.
+    const uses = boardUses(this.topo, r.id);
+    // Confirmed here as well as on the canvas: a row of boards with Rename beside Unpair is the easier of the two to
+    // hit by accident, and neither is undoable.
+    if (!window.confirm(unpairPrompt(r.name, r.host, uses))) return;
     try {
       await this.api.unpairNode(r.host);
     } catch (e: unknown) {
@@ -567,7 +544,8 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
       return;
     }
     await this.refreshLinks();
-    if (this.topo) {
+    // A board the layout still uses keeps its entry (shown as not paired on the canvas); boardUses() says why.
+    if (this.topo && !boardInUse(uses)) {
       const controllers = controllersOf(this.topo);
       const i = controllers.findIndex((c) => c.id === r.id);
       if (i >= 0) { controllers.splice(i, 1); await this.persist(); }

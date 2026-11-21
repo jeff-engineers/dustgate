@@ -1,4 +1,4 @@
-/** Board-drives cases B1–B4.
+/** Board-drives cases B1–B6.
  *
  *  Plain TypeScript on purpose — no Angular, no browser. Run with:
  *      npm run test:boards
@@ -14,7 +14,9 @@
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, canHost,
   drivesFromCaps, drivesFromHasLinear, portShortfalls, resolveDrives, shortfallText,
+  boardInUse, boardUses, unpairPrompt,
 } from './board-drives';
+import type { Topology } from '@topology';
 import { validateTopology } from '@topology';
 
 let failures = 0, checks = 0;
@@ -172,6 +174,51 @@ group('B5 a shop can run out of ports, and of one kind at a time');
      /2 sliding gates need/.test(shortfallText({ kind: 'bus', gates: 2, ports: 1 })));
   ok('a servo shortfall says how many channels there are',
      /only 4 —/.test(shortfallText({ kind: 'servo', gates: 5, ports: 4 })));
+}
+
+// ── B6 · unpairing any board (2026-11-12) ────────────────────────────────────
+group('B6 unpair is offered on any board; the layout keeps a board it still uses');
+{
+  // A node driving one gate and the table saw's clamp, beside a node nothing uses.
+  const shop = {
+    schemaVersion: 2, name: 'Shop',
+    controllers: [
+      { id: 'primary', role: 'primary', name: 'Brain' },
+      { id: 'dustgate-serial2', role: 'secondary', name: 'Serial 2', link: { transport: 'wifi-ws', host: 'dustgate-serial2' } },
+      { id: 'dustgate-spare', role: 'secondary', name: 'Spare', link: { transport: 'wifi-ws', host: 'dustgate-spare' } },
+    ],
+    systems: [{
+      id: 'system-1', name: 'Shop',
+      elements: [
+        { id: 'dc', type: 'collector', name: 'Cyclone' },
+        { id: 'gate', type: 'selector', name: 'Gate', controllerId: 'dustgate-serial2', kind: 'servoGate',
+          states: [{ id: 'open', isClosed: false, offsetDeg: 0 }, { id: 'closed', isClosed: true, offsetDeg: 90 }],
+          branches: [{ id: 'b1', opensState: 'open', role: 'tool' }], servo: { channel: 0, referenceAngle: 90 } },
+        { id: 'saw', type: 'tool', name: 'Table saw', machineId: 'saw' },
+      ],
+      ducts: [{ child: 'gate', parent: 'dc' }, { child: 'saw', parent: 'gate', parentBranch: 'b1' }],
+    }],
+    machines: [{ id: 'saw', name: 'Table saw', sensor: { ct: { controllerId: 'dustgate-serial2', channel: 0 } } }],
+    devices: [],
+  } as unknown as Topology;
+
+  const used = boardUses(shop, 'dustgate-serial2');
+  ok('its gate is counted', used.gates === 1, JSON.stringify(used));
+  ok('and the machine its clamp watches is named', used.others.length === 1 && used.others[0] === 'Table saw', JSON.stringify(used));
+  ok('so the layout keeps it', boardInUse(used));
+  ok('a board nothing uses is not in use', !boardInUse(boardUses(shop, 'dustgate-spare')));
+  ok('no layout, nothing in use', !boardInUse(boardUses(null, 'dustgate-serial2')));
+
+  const said = unpairPrompt('Serial 2', 'dustgate-serial2', used);
+  ok('the prompt says what stays, in the plural for two users',
+     /It stays on the layout, not paired, because its gate and Table saw still use it\./.test(said), said);
+  ok('and how to pick it up again', /Pair a board flashed as dustgate-serial2/.test(said), said);
+  ok('one gate alone is singular',
+     /because its gate still uses it\. .* move it to another board/.test(unpairPrompt('X', 'x', { gates: 1, others: [] })));
+  ok('two gates are plural',
+     /its 2 gates still use it\. .* move them/.test(unpairPrompt('X', 'x', { gates: 2, others: [] })));
+  ok('a board nothing uses is simply forgotten',
+     /Pair it again from Boards\.$/.test(unpairPrompt('Spare', 'dustgate-spare', { gates: 0, others: [] })));
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);
