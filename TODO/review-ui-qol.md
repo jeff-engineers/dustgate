@@ -32,13 +32,7 @@ Zones:
 ## 1. Words a person reads
 
 ### 1.1 [H] Validator JSON shown raw on Boards
-**Where:** Boards (`boards/board-setup.component.ts:990` `message()` → `failureReason()`); seen in the demo on open.
-**What:** Opening Boards in the demo printed `That didn't go through — invalid topology: [{"code":"controller",
-"message":"system \"s2\": board \"ShopVac node\" is set up as a servo board…","ref":"dustgate-slider-1"}].` D-84 passes
-"the brain's own reason" through, and when that reason is a validator array the person gets JSON.
-**Fix:** In `services/failure.ts`, turn a body that carries a validator `errors`/issues array into the same woodworker
-sentence the canvas guide bar uses (`wip-message.ts`), with the raw body going to the console only. One place fixes
-every screen.
+**FIXED 2026-11-23** — A refused layout reads in the guide bar's words, not the validator's
 
 ### 1.2 [H] "HTTP 500" and "refused" in every screen's failure line
 **Where:** `services/failure.ts:55` and `:64` (`refused it (HTTP ${status})`); seen on Tools, Gates, Plugs and the canvas
