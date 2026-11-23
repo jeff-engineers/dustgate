@@ -312,15 +312,7 @@ menu.
 ## 6. The demo
 
 ### 6.1 [C] The demo shop fails validation, so its Live view is dead
-**Where:** `services/demo-topology.ts:139` (`drives: "linear"`, a value removed by the bus-chain work); seen at
-`/?demo#/shop`.
-**What:** The public demo opens on "Shop layout incomplete — Dust collection: bad drives "linear" (servo|bus) (and 1
-more) Nothing can be switched on until it's sorted out." — raw validator text, and nothing on the Live list can be
-tapped. The canvas meanwhile says "1 sliding gate needs a bus board and this shop has none", and Boards dumps JSON
-(1.1). Nothing in the UI suites validates the demo seed.
-**Fix:** Make the ShopVac board a bus board in the seed, and add a spec that runs `validateShop` over
-`demo-topology.ts` so the seed cannot drift again. (The raw text on Live is the parallel session's `shop-ready.ts`
-item.)
+**FIXED 2026-11-23** — The demo seed is a bus board again, and a spec holds it valid
 
 ### 6.2 [L] Demo data that confuses
 **Where:** `demo-topology.ts`.
