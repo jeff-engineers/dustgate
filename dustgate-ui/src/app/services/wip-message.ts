@@ -209,6 +209,20 @@ const PHRASINGS: Array<{
                  + `If it really is the slider's board, make sure it is switched on and running the bus board firmware, `
                  + `then save again.`,
   },
+  // A bus board's chains (D-87): the order its servos are wired in. A chain naming a gate that is gone is a stale entry,
+  // not a missing gate — what to do is tidy the chain.
+  {
+    re: /^board "([^"]+)" chain names "([^"]+)", which is not a gate$/,
+    say: (d, m) => `The servo chain on board ${label(d, m[1])} lists a gate that’s no longer on the layout. Take it off the chain.`,
+  },
+  {
+    re: /^board "([^"]+)" chain names "([^"]+)", which is on another board$/,
+    say: (d, m) => `The servo chain on board ${label(d, m[1])} lists ${label(d, m[2])}, which is on another board. Move it to that board’s chain.`,
+  },
+  {
+    re: /^board "([^"]+)" has "([^"]+)" on its chains twice$/,
+    say: (d, m) => `${label(d, m[2])} is on the servo chains of board ${label(d, m[1])} twice. Take one off.`,
+  },
   {
     re: /^selector missing controllerId$/,
     say: () => `A gate has no board driving it.`,

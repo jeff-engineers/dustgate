@@ -166,6 +166,50 @@ const portEnabled = (port) => port.enabled !== false;
 // Validation
 // ---------------------------------------------------------------------------
 
+// ── WHAT A BRAIN REFUSES (D-88, jeff 2026-11-23) ─────────────────────────────
+//
+// A save is never blocked by a problem the shop can run around: everything validateShop finds is stored as given, the app
+// names the tools, gates, plugs, clamps and boards it affects, and the brain leaves alone what it cannot drive safely. The only refusal is a document
+// that is not a shop at all. MATCHED PAIR with control/LayoutGate.h (layout-gate.test.js ↔ test_layoutgate.cpp, same
+// cases, same order, same words): the mock and the demo refuse exactly what the brains do.
+
+/** null when a brain will hold this layout, else why not (the brain's own words). */
+function layoutGate(t) {
+  const isObj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);
+  if (!isObj(t)) return 'topology must be an object';
+  if (!Array.isArray(t.controllers)) return 'controllers not an array';
+  if (t.controllers.filter((c) => isObj(c) && c.role === 'primary').length !== 1) return 'exactly one primary controller required';
+  if (!Array.isArray(t.systems)) return 'systems not an array';
+  if (t.systems.length === 0) return 'a shop needs at least one system';
+  if (!Array.isArray(t.machines)) return 'machines not an array';
+  for (const sys of t.systems) {
+    const sid = isObj(sys) ? sys.id : undefined;
+    if (typeof sid !== 'string' || !sid) return 'system missing id';
+    if (!Array.isArray(sys.elements)) return `system "${sid}": elements not an array`;
+    if (sys.elements.filter((e) => isObj(e) && e.type === 'collector').length !== 1) return `system "${sid}": exactly one collector required`;
+  }
+  return null;
+}
+
+/** Gates that share a PWM channel on one board with another gate: never moved, each raises gate-shares-channel.
+ *  Matched by sharedChannelGates() in control/LayoutGate.h. */
+function sharedChannelGates(t) {
+  const byPad = new Map();
+  for (const sys of (t && t.systems) || []) {
+    for (const e of (sys && sys.elements) || []) {
+      if (!e || e.type !== 'selector' || typeof e.controllerId !== 'string' || !e.controllerId || typeof e.id !== 'string') continue;
+      const ch = e.servo && e.servo.channel;
+      if (!Number.isInteger(ch)) continue;
+      const key = e.controllerId + '\0' + ch;
+      if (!byPad.has(key)) byPad.set(key, []);
+      byPad.get(key).push(e.id);
+    }
+  }
+  const out = new Set();
+  for (const ids of byPad.values()) if (ids.length > 1) for (const id of ids) out.add(id);
+  return out;
+}
+
 /**
  * Validate a whole shop: shape, controllers, unique system ids, machines, then
  * every system as a topology in its own right.
@@ -804,5 +848,5 @@ function isOptionalBoard(shop, controllerId) {
 module.exports = {
   SHOP_SCHEMA_VERSION, MAX_SUPPLEMENTAL_PORTS, nextBusId, servoPulseRange, SERVO_PULSE_BOUNDS, failsafeCloseMs, FAILSAFE_BOUNDS, isOptionalBoard,
   systemView, systemsOf, machinesOf, machineIndex, portsByMachine, plugOwners, portEnabled,
-  validateShop, routeShop, planShopTransition,
+  validateShop, layoutGate, sharedChannelGates, routeShop, planShopTransition,
 };

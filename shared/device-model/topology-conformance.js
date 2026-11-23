@@ -84,13 +84,17 @@ async function run() {
     check('a document without systems[] → 400', flat.status === 400, `status=${flat.status}`);
   }
 
-  // 1b. Two servo gates on one board can't share a PWM channel — they'd move together.
+  // 1b. Two servo gates on one board can't share a PWM channel — they'd move together. Kept, not refused (D-88): neither
+  //     gate is moved, and each is a problem the brain words.
   {
     const dup = fixtures.clone(twoGatesShop);
     dup.systems[0].elements.find((e) => e.id === 'gate2').servo.channel = 0;   // gate1 already holds 0
     const r = await req('PUT', '/api/topology', dup);
-    check('duplicate servo channel on one host → 400', r.status === 400,
-      `status=${r.status}`);
+    check('duplicate servo channel on one host → kept', r.status === 200, `status=${r.status}`);
+    const st = await req('GET', '/api/status');
+    const shared = (st.json?.problems || []).filter((p) => p.code === 'gate-shares-channel').map((p) => p.subject.id).sort();
+    check('...and both gates are named as problems', shared.join(',') === 'gate1,gate2', shared.join(','));
+    await req('DELETE', '/api/topology');
   }
 
   // 2. PUT/GET roundtrip + initial status.

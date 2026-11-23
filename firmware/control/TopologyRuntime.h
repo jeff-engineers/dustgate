@@ -174,6 +174,8 @@ static const char* const kProblemBlind   = "Commanded on, but its plug isn't ans
 // watches the blower: with nothing watching, the woodworker is trusted to know. PROBLEM_TEXT.needsStart in topology-device.js.
 static const char* const kProblemBinFull = "The dust bin is full \xE2\x80\x94 empty it before the next cut.";
 static const char* const kProblemNeedsStart = "A tool is running and the dust collector isn't \xE2\x80\x94 please turn it on.";
+// A gate wired to the same board port as another (sharedChannelGates, D-88): neither is moved, so say how to fix it.
+static const char* const kProblemSharedChannel = "Wired to the same board port as another gate, so DustGate won't move either \xE2\x80\x94 give each gate its own port on the layout.";
 
 struct FailedMove {
     std::string systemId;
@@ -295,6 +297,7 @@ public:
         }
 
         _doc = std::move(doc);
+        _sharedChannel = sharedChannelGates(_doc->as<JsonObjectConst>());
         _ctrl.setTopology(_doc->as<JsonObjectConst>());
         _queue.clear();
         _failed.clear();
@@ -386,6 +389,7 @@ public:
 
     void clear() {
         _doc.reset();
+        _sharedChannel.clear();
         _queue.clear();
         _failed.clear();
         _stuck.clear();
@@ -786,6 +790,10 @@ public:
             };
             if (sel.isNull()) {
                 fail("unknown selector");
+            } else if (_sharedChannel.count(m.selectorId)) {
+                // Failed like a gate on an unlinked board, so the failed-make rules (D-85) hold the blower the same way —
+                // but not kept in `_stuck`: gate-shares-channel already says why, and a second row would only repeat it.
+                _failed.push_back(FailedMove{sysId, m.selectorId, m.toState, "shares a servo channel with another gate", m.isBreak});
             } else if (!_bus->onlineFor(sel)) {
                 fail("controller offline");
             } else if (!_bus->setState(m.selectorId.c_str(), sel, m.toState.c_str())) {
@@ -856,7 +864,7 @@ public:
         for (const SystemView& sys : systemsOf(topology())) {
             if (std::string(sys.id ? sys.id : "") != systemId) continue;
             for (JsonObjectConst e : sys.elements)
-                if (_eq(e["type"], "selector") && !_bus->onlineFor(e)) return false;
+                if (_eq(e["type"], "selector") && !drivable(e)) return false;
         }
         return true;
     }
@@ -1247,6 +1255,8 @@ public:
             if (kv.second.binKnown && kv.second.binFull)
                 add("bin-full", "bad", "system", kv.first, kProblemBinFull, false, 0);
         }
+        for (const std::string& id : _sharedChannel)
+            add("gate-shares-channel", "bad", "selector", id, kProblemSharedChannel, false, 0);
         for (auto& kv : _stuck) {
             const FailedMove& f = kv.second;
             add("move-failed", f.isBreak ? "warn" : "bad", "selector", f.selectorId,
@@ -1456,7 +1466,7 @@ private:
             for (JsonObjectConst e : sys.elements) {
                 if (!_eq(e["type"], "selector")) continue;
                 const std::string id = _str(e["id"]);
-                if (id == except || _inFlight.count(id) || !_bus->onlineFor(e)) continue;
+                if (id == except || _inFlight.count(id) || !drivable(e)) continue;
                 auto it = _hwStates.find(id);
                 const char* closed = _closedState(e);
                 if (it == _hwStates.end() || it->second.empty()) continue;
@@ -1469,6 +1479,9 @@ private:
         for (const QueuedMove& q : _queue) if (q.move.selectorId == selectorId) return true;
         return false;
     }
+    // A gate the brain may move: its board is linked and it has a servo channel to itself (D-88). Everything that asks
+    // "can this path be opened" asks this, so a gate that shares a channel is planned around exactly as one on a lost board.
+    bool drivable(JsonObjectConst sel) const { return _bus->onlineFor(sel) && !_sharedChannel.count(_str(sel["id"])); }
     bool lastVisibleOpen(const std::string& systemId, const std::string& selectorId) const {
         return visibleOpenPath(systemId) && !visibleOpenPath(systemId, selectorId);
     }
@@ -1494,7 +1507,7 @@ private:
         for (const QueuedMove& q : _queue) {
             if (q.systemId != systemId || q.move.isBreak) continue;
             JsonObjectConst sel = selectorById(q.move.selectorId);
-            if (!sel.isNull() && _bus->onlineFor(sel)) return true;
+            if (!sel.isNull() && drivable(sel)) return true;
         }
         return false;
     }
@@ -1519,7 +1532,7 @@ private:
                     if (st == r.states.end()) continue;
                     const char* closed = _closedState(e);
                     if (closed && st->second == std::string(closed)) continue;   // only the gates this path OPENS
-                    if (!_bus->onlineFor(e)) { reachable = false; break; }
+                    if (!drivable(e)) { reachable = false; break; }
                     want[id] = st->second;
                     opens = true;
                 }
@@ -1981,6 +1994,7 @@ private:
     std::deque<QueuedMove>               _queue;
     std::map<std::string, Problem>       _raised;
     std::vector<FailedMove>              _failed;
+    std::set<std::string>                _sharedChannel;   // gates never moved: they share a servo channel (D-88)
     std::map<std::string, FailedMove>    _stuck;      // selectorId → its last failed move, until it next moves
     // What has actually been COMMANDED to hardware, as opposed to what the brain
     // has decided. Diverges from Controller::actuatorStates() whenever a plan is
