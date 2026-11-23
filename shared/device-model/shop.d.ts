@@ -49,6 +49,10 @@ export function portsByMachine(shop: Shop): Map<string, { systemId: string; port
 export function portEnabled(port: Record<string, unknown>): boolean;
 
 export function validateShop(shop: unknown): ValidationResult;
+/** null when a brain will hold this layout, else why not (D-88: the only refusal). Twin of control/LayoutGate.h. */
+export function layoutGate(shop: unknown): string | null;
+/** Gates sharing a servo channel on one board: never moved (D-88). Twin of sharedChannelGates() in LayoutGate.h. */
+export function sharedChannelGates(shop: unknown): Set<string>;
 
 /**
  * A machine is only as routed as its worst port.

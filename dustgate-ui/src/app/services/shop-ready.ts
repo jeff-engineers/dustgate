@@ -5,13 +5,14 @@
  *  if it isn't. Kept as one function so the answer can't drift between the entry
  *  redirect and anything else that wants to ask.
  *
- *  "Good" here means the shop can actually be driven, which is a higher bar than
- *  "the document is valid": a layout can be perfectly well-formed and still have a
- *  gate nobody has measured yet.
+ *  "Good" here means the shop can actually be driven: a layout can be perfectly
+ *  well-formed and still have a gate nobody has measured yet. It is not "the document
+ *  is valid": a layout saved with problems runs, and the Live view names what may not
+ *  work (D-88).
  */
 
 import { airflowIssues, type Topology } from '@topology';
-import { validateShop } from '@shop';
+import { layoutGate } from '@shop';
 import {
   elementsOf, isCalibrated, isLinearSelector, isServoSelector,
   type ConfigurableSelector,
@@ -31,10 +32,10 @@ export function shopReadiness(input: Topology | null | undefined): ShopReadiness
   const shop = toShop(input) as unknown as ShopDoc;
   const topo = shop as unknown as Topology;
 
-  const valid = validateShop(shop);
-  if (!valid.ok) {
-    const first = valid.errors?.[0]?.message;
-    return { ready: false, reason: first ? `The layout has a problem: ${first}` : 'The layout has a problem.' };
+  // Only a layout no brain would hold stops the shop here (D-88). Any other problem is one the brain runs around: the
+  // Live view runs and names what may not work, so sending the person to the canvas every time the app opens is wrong.
+  if (layoutGate(shop)) {
+    return { ready: false, reason: 'The layout has a problem: every dust collection system needs exactly one dust collector.' };
   }
 
   // Machines, not ports: "no tools yet" is about things you can switch on.

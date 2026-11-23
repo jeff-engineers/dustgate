@@ -831,6 +831,39 @@ int main(int argc, char** argv) {
       rt.setBinFull("big", false);
       probs(n);
       ok("problems: and clears when it is emptied", n == before);
+
+      // Two gates on one board port (D-88): the layout is kept, neither gate is moved, and each is a problem the device words.
+      {
+        DynamicJsonDocument tg(16384);
+        deserializeJson(tg, twoGatesJson);
+        for (JsonObject e : tg["systems"][0]["elements"].as<JsonArray>())
+          if (topo::_eq(e["id"], "gate2")) e["servo"]["channel"] = 0;
+        std::string clash; serializeJson(tg, clash);
+        StubBus lb; topo::NodeBus nb2; topo::TopologyRuntime r2;
+        nb2.setLocal(&lb, "primary");
+        r2.begin(&nb2);
+        std::string e2;
+        const bool kept = r2.adopt(clash.c_str(), clash.size(), e2);
+        r2.settleAtBoot();
+        for (int i = 0; i < 10; i++) { r2.update(t0); lb.settle(); }
+        DynamicJsonDocument sd(8192);
+        r2.writeStatus(sd.to<JsonObject>());
+        std::vector<std::string> ids, texts; std::string sev, st;
+        for (JsonObjectConst o : sd["problems"].as<JsonArrayConst>())
+          if (std::string(o["code"] | "") == "gate-shares-channel") {
+            ids.push_back(o["subject"]["id"] | ""); texts.push_back(o["text"] | "");
+            sev = o["severity"] | ""; st = o["subject"]["type"] | "";
+          }
+        ok("problems: two gates on one port are a problem each",
+           kept && ids.size() == 2 && ids[0] == "gate1" && ids[1] == "gate2" && sev == "bad" && st == "selector", e2);
+        ok("problems: the device words the fix",
+           !texts.empty() && texts[0] == "Wired to the same board port as another gate, so DustGate won't move either \xE2\x80\x94 give each gate its own port on the layout.",
+           texts.empty() ? "" : texts[0]);
+        lb.log.clear();
+        r2.setMachinePower("toolX", 1500);
+        for (int i = 0; i < 10; i++) { r2.update(t0 + 1000); lb.settle(); }
+        ok("problems: and the gate its tool needs is not moved", joined(lb.log).find("gate1") == std::string::npos, joined(lb.log));
+      }
     }
     // Concatenated per system in document order, never interleaved. The jointer
     // valve is still open here (idle-HOLD left it where it was), so the big

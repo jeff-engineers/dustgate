@@ -9,7 +9,7 @@ import { takeoverWarning } from '@plug-claim';
 import { samePlug } from '@plug-identity';
 import { MAX_BUS_SERVOS_PER_HOST, airflowIssues, redundantSelectors, type AirflowIssue } from '@topology';
 import { COLLECTOR_RUNNING_W } from '@topology-device';
-import { validateShop, SHOP_SCHEMA_VERSION } from '@shop';
+import { layoutGate, validateShop, SHOP_SCHEMA_VERSION } from '@shop';
 import { SelectorConfigComponent } from '../gates/selector-config.component';
 import { ElementOutletConfigComponent } from '../tools/element-outlet-config.component';
 import { CollectorSetupComponent } from '../tools/collector-setup.component';
@@ -29,7 +29,7 @@ import {
   systemById, systemsOf, systemViews, toShop, clampOffered, clampBoardOf, clampTakenBy,
   planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf, collectorOf, type SystemRemoval,
 } from '../services/shop-doc';
-import { wipSummary } from '../services/wip-message';
+import { layoutWarning } from '../services/layout-warning';
 import { failureReason, noAnswer, reportFailure, reportNote, QuietPoll } from '../services/failure';
 import {
   type Glyph, type Pt, type SceneNode,
@@ -361,8 +361,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** What happened to a plug on the last unpair, when it's worth saying. Consumed
    *  by the next save() — see there for why it isn't written to saveNote directly. */
   unpairNote = '';
-  /** Structural gap that stops the controller accepting the doc (draft kept here). */
-  wip = '';
+  /** The saved layout has problems the shop runs around (D-88): which tools, gates, plugs, clamps and boards may not work, each by its own word. */
+  saveWarn = '';
   /** The gate whose config sheet is open, or null. */
   configuring: ConfigurableSelector | null = null;
   /** Which half of that sheet the menu asked for. */
@@ -381,10 +381,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private future: string[] = [];
   private lastTag: string | null = null;
   airflowErrors: AirflowIssue[] = [];
-  /** Element ids from the last validation failure, for the halo. The MESSAGE is
-   *  `wip`; these are the same failures' `ref`s, kept because a sentence cannot
+  /** Element ids from the saved layout's problems, for the halo. The MESSAGE is
+   *  `saveWarn`; these are the same problems' `ref`s, kept because a sentence cannot
    *  point at anything. */
-  private wipRefs: string[] = [];
+  private warnRefs: string[] = [];
   vbW = 400; vbH = 300;
   /** Solves every duct on the board, memoized on the scene — see routing/router.ts. */
   private readonly router = new Router();
@@ -565,6 +565,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     else this.autoLayoutInto(this.cells);
     this.loadBoardCells(this.topo);
     this.syncNodes();
+    if (shop && !this.loadFailed) this.warnAbout(this.topo, 'Canvas · load', false);   // a layout saved with problems still says so
     await this.mergePairedBoards();
     // /boards used to hand you back with ?layer=wiring so you'd land on the view
     // the boards belonged to. There is only one view now, so the parameter is
@@ -2613,7 +2614,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!this.topo) return false;
     const snap = this.snapshot();
     const before = { dirty: this.dirty, saveError: this.saveError, saveNote: this.saveNote,
-                     wip: this.wip, airflowErrors: this.airflowErrors, selectedId: this.selectedId,
+                     saveWarn: this.saveWarn, airflowErrors: this.airflowErrors, selectedId: this.selectedId,
                      lastTag: this.lastTag };
     // Compared against the board as it stands, not against zero. A shop that ALREADY
     // has an overlap somewhere is not a shop where every splice must be refused —
@@ -2631,7 +2632,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.cells = new Map(state.cells);
       this.boardCells = new Map(state.boards ?? []);
       this.dirty = before.dirty; this.saveError = before.saveError; this.saveNote = before.saveNote;
-      this.wip = before.wip; this.airflowErrors = before.airflowErrors;
+      this.saveWarn = before.saveWarn; this.airflowErrors = before.airflowErrors;
       this.selectedId = before.selectedId; this.lastTag = before.lastTag;
       this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
       this.router.invalidate();          // the dry run moved nothing, but the hash saw a different board
@@ -4627,7 +4628,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.writeBinding(holder, was.board, was.ch);
     }
     this.writeBinding(gateId, boardId, ch);
-    this.dirty = true; this.saveError = ''; this.saveNote = ''; this.wip = '';
+    this.dirty = true; this.saveError = ''; this.saveNote = ''; this.saveWarn = '';
     this.syncNodes();
   }
   private writeBinding(gateId: string, boardId: string, ch: number): void {
@@ -4723,14 +4724,14 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.boardCells = new Map(state.boards ?? []);
     this.lastTag = null;                       // never coalesce across an undo
     this.selectedId = null; this.closeMenu();
-    this.dirty = true; this.saveError = ''; this.wip = ''; this.saveNote = '';
+    this.dirty = true; this.saveError = ''; this.saveWarn = ''; this.saveNote = '';
     this.airflowErrors = [];
     this.buildGraph(this.topo); this.syncNodes(); this.refreshHandles();
   }
 
   private afterMutation(selectId: string | null): void {
     if (!this.topo) return;
-    this.dirty = true; this.saveError = ''; this.airflowErrors = []; this.saveNote = ''; this.wip = '';
+    this.dirty = true; this.saveError = ''; this.airflowErrors = []; this.saveNote = ''; this.saveWarn = '';
     this.normalizeCells();
     this.collapsePassThroughJunctions();
     this.buildGraph(this.topo); this.syncNodes();
@@ -5175,7 +5176,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       out.add(l.id);
       for (const w of l.with ?? []) out.add(w.id);
     }
-    for (const r of this.wipRefs) out.add(r);
+    for (const r of this.warnRefs) out.add(r);
     return out;
   }
 
@@ -5261,9 +5262,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     };
     if (this.saveError) return { text: this.saveError, kind: 'warn', sub: this.saveSub || undefined,
                                  acts: this.saveSub ? ['save', 'discard'] : undefined };
-    if (this.wip) return {
-      text: `Not saved — ${this.wip}`, kind: 'warn', acts: [...(this.wipRefs.length ? ['show' as const] : []), 'discard'],
-      sub: 'Your changes stay on this screen until you fix this or leave it. Reloading throws them away.',
+    // Saved, and the brain runs everything else (D-88): the warning names what may not work and offers to show it.
+    if (this.saveWarn) return {
+      text: this.saveWarn, kind: 'warn', acts: this.warnRefs.length ? ['show'] : undefined,
     };
 
     // Below the real problems, above the general nudges: a redundant gate is a
@@ -5378,29 +5379,26 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /**
-   * Save never blocks on an unfinished shop — you can stop mid-build and come back.
-   * Problems are flagged as work-in-progress instead, and the Live view refuses to
-   * drive anything until they're cleared (see LiveViewComponent.ready).
+   * Save never blocks on an unfinished shop — you can stop mid-build and come back (D-88).
+   * The brain keeps whatever is a shop at all, runs what the problems don't touch, and
+   * the guide bar names the tools, gates, plugs, clamps and boards that may not work until it is fixed.
    *
-   * The one thing we can't do is PUT a structurally broken doc: the controller
-   * rejects it with 400. That draft stays here, intact, and the guide bar says so.
+   * The one thing we can't do is PUT a document that is not a shop (layoutGate — a
+   * system without its one collector, say): every brain refuses it. That draft stays
+   * here, intact, and the guide bar says so.
    */
   async save(): Promise<void> {
     if (!this.topo || this.saving) return;
     if (this.loadFailed) return;                         // never save a blank stand-in over a layout we could not read
     const doc = this.docWithLayout();
-    const v = validateShop(doc);
-    this.saving = true; this.saveError = ''; this.saveSub = ''; this.saveNote = ''; this.wip = ''; this.wipRefs = [];
+    const notAShop = layoutGate(doc);
+    this.saving = true; this.saveError = ''; this.saveSub = ''; this.saveNote = ''; this.saveWarn = ''; this.warnRefs = [];
     try {
       this.topo = doc as Topology;                     // keep the draft either way
-      if (!v.ok) {
-        // The model's own message names ids ("element \"p8\"") because ids are what a
-        // document is made of. Nobody typed those, so they get translated on the way
-        // to the guide bar — see services/wip-message.ts.
-        this.wip = wipSummary(doc as unknown as ShopDoc, v.errors);
-        this.wipRefs = (v.errors as { ref?: string }[]).map(e => e.ref).filter((r): r is string => !!r);
-        // The validator's own words, for whoever is debugging: the bar shows the translation.
-        reportNote('Canvas · save: not saved (the layout check refused it)', `Not saved — ${this.wip}`, { issues: v.errors });
+      if (notAShop) {
+        this.saveError = reportNote('Canvas · save: not saved (not a shop: every brain refuses it)',
+          'Not saved — every dust collection system needs exactly one dust collector.', { why: notAShop });
+        this.saveSub = 'Your changes are kept on this screen.';
         return;                                        // still dirty — retry once it's whole
       }
       await this.api.putTopology(doc as Topology);
@@ -5416,14 +5414,24 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         for (const ip of release) { try { await this.api.releaseOutlet(ip); } catch { /* best effort, as before */ } }
       })();
       this.airflowErrors = this.liveLeaks();
+      this.warnAbout(doc, 'Canvas · save');
       // An unpair that couldn't fully release the plug says so HERE rather than in
       // the sheet, which closes on the way out. It replaces "Saved." exactly once
       // — the layout did save; the plug is the part worth mentioning.
-      this.saveNote = this.airflowErrors.length ? '' : (this.unpairNote || 'Saved.');
+      this.saveNote = this.airflowErrors.length || this.saveWarn ? '' : (this.unpairNote || 'Saved.');
       this.unpairNote = '';
     } catch (e) {
       this.setSaveFailure('Canvas · save', e);
     } finally { this.saving = false; }
+  }
+
+  /** The layout as saved: what its problems mean for the shop, on the guide bar, and the validator's own words in the
+   *  console. Clears both when there are none. */
+  private warnAbout(doc: unknown, context: string, justSaved = true): void {
+    const v = validateShop(doc);
+    this.saveWarn = v.ok ? '' : layoutWarning(doc as ShopDoc, v.errors, justSaved);
+    this.warnRefs = v.ok ? [] : (v.errors as { ref?: string }[]).map(e => e.ref).filter((r): r is string => !!r);
+    if (!v.ok) reportNote(`${context}: saved with problems`, this.saveWarn, { issues: v.errors });
   }
 
   /** A save the brain refused or never answered: which of the two, in its own words, and where the changes are. */
@@ -5447,7 +5455,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
 
   /** Scroll to the pieces the save problem names (they already wear the red halo). */
   private showProblem(): void {
-    const ids = new Set(this.wipRefs);
+    const ids = new Set(this.warnRefs);
     let y0 = Infinity, y1 = -Infinity, x0 = Infinity, x1 = -Infinity;
     for (const n of this.nodes) if (ids.has(n.id)) {
       x0 = Math.min(x0, cellX(n.col)); x1 = Math.max(x1, cellX(n.col)); y0 = Math.min(y0, cellY(n.row)); y1 = Math.max(y1, cellY(n.row));
@@ -5703,7 +5711,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const broken = this.importBlocker(doc);
     if (broken) { this.saveError = 'That file doesn’t look like a shop layout: ' + broken; return; }
 
-    this.saving = true; this.saveError = ''; this.saveNote = ''; this.wip = '';
+    this.saving = true; this.saveError = ''; this.saveNote = ''; this.saveWarn = '';
     try {
       this.pushHistory(null);                 // an import is undoable like any other edit
       this.topo = JSON.parse(JSON.stringify(doc)) as Topology;
@@ -5716,20 +5724,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.selectedId = null;
       this.syncNodes();
 
-      // Only a whole layout goes to the controller — it validates server-side and
-      // would reject a draft anyway. An unfinished one stays here, dirty, with the
-      // reason on the guide bar, and Save picks it up once you've sorted it out.
-      const v = validateShop(this.docWithLayout());
-      if (!v.ok) {
+      // Saved like any save (D-88): only a document that is not a shop stays here, unsaved, with the reason on the bar.
+      const toSave = this.docWithLayout();
+      const notAShop = layoutGate(toSave);
+      if (notAShop) {
         this.dirty = true;
-        this.wip = wipSummary(this.docWithLayout() as unknown as ShopDoc, v.errors);
-        this.wipRefs = (v.errors as { ref?: string }[]).map(e => e.ref).filter((r): r is string => !!r);
-        reportNote('Canvas · import: not saved (the layout check refused it)', `Not saved — ${this.wip}`, { issues: v.errors });
+        this.saveError = reportNote('Canvas · import: not saved (not a shop: every brain refuses it)',
+          'Not saved — every dust collection system needs exactly one dust collector.', { why: notAShop });
+        this.saveSub = 'The file is open on this screen.';
         return;
       }
-      await this.api.putTopology(this.docWithLayout() as Topology);
+      await this.api.putTopology(toSave as Topology);
       this.dirty = false;
       this.airflowErrors = this.liveLeaks();
+      this.warnAbout(toSave, 'Canvas · import');
       try { this.applyLive(await this.api.getStatus()); } catch { /* not running */ }
     } catch (e) {
       this.dirty = true;

@@ -6,7 +6,7 @@
 'use strict';
 
 const TD = require('./topology-device');
-const { clone, twoSystemShop } = require('./topology.fixtures');
+const { clone, twoGates, twoSystemShop } = require('./topology.fixtures');
 
 const results = [];
 const check = (name, cond, detail = '') => results.push({ name, ok: !!cond, detail });
@@ -76,6 +76,19 @@ const plugged = () => {
   check('the device words the bin', p[0].text === 'The dust bin is full — empty it before the next cut.', p[0].text);
   TD.setBinFull(d, 'big', false);
   check('and clears when it is emptied', probs(d, 0).length === 0);
+}
+{
+  // Two gates on one board port (D-88): the layout is kept, neither gate is moved, and each is a problem the device words.
+  const shop = clone(twoGates);
+  shop.systems[0].elements.find((e) => e.id === 'gate2').servo.channel = 0;
+  const d = TD.settleAtBoot(TD.createTopologyDevice(shop));
+  const p = probs(d, 0).filter((x) => x.code === 'gate-shares-channel');
+  check('two gates on one port are a problem each',
+    p.length === 2 && p[0].subject.id === 'gate1' && p[1].subject.id === 'gate2' && p[0].severity === 'bad' && p[0].subject.type === 'selector');
+  check('the device words the fix',
+    p[0].text === "Wired to the same board port as another gate, so DustGate won't move either — give each gate its own port on the layout.", p[0].text);
+  TD.setMachinePower(d, 'toolX', 1500, 1000);
+  check('and the gate its tool needs is not moved', d.actuatorStates.gate1 === 'closed', d.actuatorStates.gate1);
 }
 
 let failed = 0;
