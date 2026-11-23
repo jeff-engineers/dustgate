@@ -319,9 +319,12 @@ function handler(req, res) {
   // it wouldn't implement /sim/tool — the demo/mock use it to drive routing).
   if (pathname === '/api/topology' && req.method === 'PUT') {
     return body(req, data => {
-      // A shop only, as the firmware takes.
+      // Refused only when it is not a shop at all, as the brains refuse (LayoutGate.h, D-88). Anything else is kept: the app
+      // names what it affects, and the runtime leaves alone the gates it can't drive safely.
+      const why = SHOP.layoutGate(data);
+      if (why) return json(res, { error: why, errors: [{ message: why }] }, 400);
       const v = SHOP.validateShop(data);
-      if (!v.ok) return json(res, { error: 'invalid topology', errors: v.errors }, 400);
+      if (!v.ok) console.log(`[MOCK] layout kept with ${v.errors.length} problem(s):`, v.errors.map((e) => e.message).join('; '));
       // A save is not a reboot: the running tools, the blowers and the gates the save left alone carry over, as on the brains.
       // From nothing (no layout before): settle it, one gate open per system, as both brains do.
       td = td ? TD.createTopologyDevice(data, td) : TD.settleAtBoot(TD.createTopologyDevice(data));

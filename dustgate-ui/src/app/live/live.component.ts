@@ -1,6 +1,6 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { failureReason, reportFailure, reportNote, QuietPoll } from '../services/failure';
-import { wipSummary } from '../services/wip-message';
+import { layoutWarning } from '../services/layout-warning';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { ApiService, Topology, TopologyStatus } from '../services/api.service';
@@ -381,6 +381,11 @@ const POLL_MS = 2000;
         <span>Shop layout incomplete — {{ notReadyReason }} Nothing can be switched on until it’s sorted out.</span>
         <a [routerLink]="fixLink">Finish setup →</a>
       </div>
+      <!-- Saved with problems (D-88): the shop runs, and this says what may not. -->
+      <div class="incomplete" *ngIf="ready && layoutWarn">
+        <span>{{ layoutWarn }}</span>
+        <a routerLink="/build">Fix the layout →</a>
+      </div>
 
       <p class="ctlerr" *ngIf="error" role="alert">{{ error }}</p>
 
@@ -613,6 +618,8 @@ export class LiveViewComponent implements OnInit, OnDestroy {
    *  no collector moves until it's whole. */
   ready = true;
   notReadyReason = '';
+  /** The saved layout's problems, when it has any: the tools, gates, plugs, clamps and boards that may not work (D-88). Not a reason to stop the shop. */
+  layoutWarn = '';
   /** Last control failure, shown inline. A tap that silently does nothing is the
    *  exact failure mode this view just had. */
   error = '';
@@ -1050,22 +1057,21 @@ export class LiveViewComponent implements OnInit, OnDestroy {
     }
   }
 
-  /** The shop has to be structurally whole, free of always-open leaks, AND have every
-   *  servo gate calibrated before it may run. The first two are what the build canvas
-   *  reports as work-in-progress; the third is the /gates pass. An uncalibrated gate is
-   *  as unsafe as a leak — we'd be driving to positions nobody has checked. */
+  /** The shop has to be free of always-open leaks AND have every servo gate calibrated
+   *  before it may run: an uncalibrated gate is as unsafe as a leak — we'd be driving to
+   *  positions nobody has checked. A layout saved with problems still runs (D-88): the
+   *  brain leaves alone what it can't drive, and `layoutWarn` names what may not work. */
   private checkReady(topo: Topology): void {
     let reason = '';
     this.fixLink = '/build';
     try {
       const v = validateShop(topo);
-      // In the shop's words, as the canvas says it (wip-message.ts); the validator's own text goes to the console.
-      // Logged once per new reason, not on every read: this runs each time the layout is read.
-      if (!v.ok) {
-        reason = wipSummary(topo as unknown as ShopDoc, v.errors);
-        if (reason !== this.notReadyReason) reportNote('Live · not ready: the layout check refused it', reason, { issues: v.errors });
-      }
-      else {
+      // In the shop's words, as the canvas says it (layout-warning.ts); the validator's own text goes to the console.
+      // Logged once per new warning, not on every read: this runs each time the layout is read.
+      const warn = v.ok ? '' : layoutWarning(topo as unknown as ShopDoc, v.errors);
+      if (warn && warn !== this.layoutWarn) reportNote('Live · the saved layout has problems', warn, { issues: v.errors });
+      this.layoutWarn = warn;
+      {
         // Per system — a leak is a statement about one blower's ducts, and
         // airflowIssues handed a whole shop would find no elements at the root
         // and report all-clear. See systemViews().

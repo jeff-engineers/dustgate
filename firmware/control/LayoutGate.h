@@ -1,9 +1,15 @@
 // =============================================================================
 // control/LayoutGate.h — the structural check every brain applies to a layout before it will hold it.
 //
-// NOT THE SCHEMA. The authoritative validator is shared/device-model/topology.js + shop.js, which the app runs before it
-// ever saves; this is the cheap last line of defence against garbage and truncation, so a brain never keeps a document its
-// runtime cannot route. It used to live in TopologyStore.h, the ESP32's LittleFS store, so the native brain never ran it
+// ONLY WHAT IS NOT A SHOP AT ALL IS REFUSED (jeff, 2026-11-23, D-88): a save is never blocked by a problem the shop can run
+// around, so a person never loses an evening's edits to one stale id. Everything else the spec finds wrong is stored as
+// given; the app names the tools, gates, plugs, clamps and boards it affects, and the runtime leaves alone what it cannot drive safely
+// (sharedChannelGates below). The JS twin is layoutGate() in shared/device-model/shop.js (layout-gate.test.js ↔
+// test_layoutgate.cpp, same cases, same order) — the mock and the demo refuse exactly what the brains do.
+//
+// NOT THE SCHEMA. The authoritative validator is shared/device-model/topology.js + shop.js, which the app runs to say what
+// a saved layout's problems affect; this is the line under which a document is not a shop at all, so a brain never keeps
+// one its runtime cannot route. It used to live in TopologyStore.h, the ESP32's LittleFS store, so the native brain never ran it
 // and kept a layout with no systems at all that the ESP32 answered 400 to (found 2026-10-18 by running the topology
 // contract suite against the native brain). Both brains now call it from TopologyRuntime::adopt().
 //
@@ -11,8 +17,10 @@
 // =============================================================================
 #pragma once
 #include <cstring>
+#include <map>
 #include <set>
 #include <string>
+#include <vector>
 #include <ArduinoJson.h>
 
 namespace topo {
@@ -42,21 +50,25 @@ inline bool layoutGate(JsonObjectConst t, std::string& err) {
         }
         if (n != 1) { err = std::string("system \"") + sid + "\": exactly one collector required"; return false; }
     }
-    // Two servo gates on one board sharing a PWM channel move together: one gate opening drags the other with it. The
-    // spec's rule (topology.js), in its words, here because a brain must not route a layout that does that whatever saved it.
-    std::set<std::string> held;
-    for (JsonObjectConst sys : systems)
+    return true;
+}
+
+// Gates that share a PWM channel on one board with another gate. Two servos on one pad move together, so opening one drags
+// the other: the runtime never moves any of them and raises gate-shares-channel for each (TopologyRuntime.h). Stored, not
+// refused (D-88): the rest of the shop still runs. Matched by sharedChannelGates() in shop.js.
+inline std::set<std::string> sharedChannelGates(JsonObjectConst t) {
+    std::map<std::string, std::vector<std::string>> byPad;
+    for (JsonObjectConst sys : t["systems"].as<JsonArrayConst>())
         for (JsonObjectConst e : sys["elements"].as<JsonArrayConst>()) {
             const char* type = e["type"];
             const char* cid = e["controllerId"];
-            if (!type || std::strcmp(type, "selector") != 0 || !cid || !e["servo"]["channel"].is<int>()) continue;
-            const int ch = e["servo"]["channel"].as<int>();
-            if (!held.insert(std::string(cid) + '\0' + std::to_string(ch)).second) {
-                err = "servo channel " + std::to_string(ch) + " on host \"" + cid + "\" is already used by another gate";
-                return false;
-            }
+            const char* id = e["id"];
+            if (!type || std::strcmp(type, "selector") != 0 || !cid || !id || !e["servo"]["channel"].is<int>()) continue;
+            byPad[std::string(cid) + '\0' + std::to_string(e["servo"]["channel"].as<int>())].push_back(id);
         }
-    return true;
+    std::set<std::string> out;
+    for (auto& kv : byPad) if (kv.second.size() > 1) out.insert(kv.second.begin(), kv.second.end());
+    return out;
 }
 
 }  // namespace topo

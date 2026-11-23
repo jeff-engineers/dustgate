@@ -39,6 +39,7 @@ export function headline(p: Problem, name: string): string {
     case 'plug-unreachable':   return 'Plug unreachable: ' + name;
     case 'plug-replaced':      return "Can't find " + name;
     case 'move-failed':        return "A gate didn't move";
+    case 'gate-shares-channel': return name + " isn't being moved";
     case 'bin-full':           return 'Dust bin full: ' + name;
     case 'collector-may-be-on': return name + ' is probably running, unseen';
     case 'clamp-unplugged':    return 'No clamp reads on ' + name;

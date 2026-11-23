@@ -28,14 +28,26 @@ int main() {
   ok("a system with two collectors: refused", !gate(R"({"controllers":[{"id":"p","role":"primary"}],"machines":[],
     "systems":[{"id":"s1","elements":[{"id":"a","type":"collector"},{"id":"b","type":"collector"}]}]})", &why) && why == "system \"s1\": exactly one collector required");
   ok("a system with none: refused", !gate(R"({"controllers":[{"id":"p","role":"primary"}],"machines":[],"systems":[{"id":"s1","elements":[]}]})"));
-  ok("two gates on one board's channel 0: refused", !gate(R"({"controllers":[{"id":"p","role":"primary"}],"machines":[],
+  // Two gates on one board's channel are a problem the shop runs around (D-88), not a reason to refuse the save.
+  const char* clash = R"({"controllers":[{"id":"p","role":"primary"}],"machines":[],
     "systems":[{"id":"s1","elements":[{"id":"dc","type":"collector"},
       {"id":"g1","type":"selector","controllerId":"n1","servo":{"channel":0}},
-      {"id":"g2","type":"selector","controllerId":"n1","servo":{"channel":0}}]}]})", &why) && why == "servo channel 0 on host \"n1\" is already used by another gate");
-  ok("...the same channel on two boards is fine", gate(R"({"controllers":[{"id":"p","role":"primary"}],"machines":[],
-    "systems":[{"id":"s1","elements":[{"id":"dc","type":"collector"},
-      {"id":"g1","type":"selector","controllerId":"n1","servo":{"channel":0}},
-      {"id":"g2","type":"selector","controllerId":"n2","servo":{"channel":0}}]}]})"));
+      {"id":"g2","type":"selector","controllerId":"n1","servo":{"channel":0}},
+      {"id":"g3","type":"selector","controllerId":"n1","servo":{"channel":1}},
+      {"id":"g4","type":"selector","controllerId":"n2","servo":{"channel":0}}]}]})";
+  ok("two gates on one board's channel 0: kept", gate(clash));
+  printf("\nS gates that share a servo channel\n");
+  {
+    DynamicJsonDocument d(4096); deserializeJson(d, clash);
+    const std::set<std::string> s = sharedChannelGates(d.as<JsonObjectConst>());
+    ok("both gates on n1's channel 0 share it", s.size() == 2 && s.count("g1") && s.count("g2"));
+    ok("...the next channel on that board does not", !s.count("g3"));
+    ok("...the same channel on another board does not", !s.count("g4"));
+  }
+  {
+    DynamicJsonDocument d(4096); deserializeJson(d, good);
+    ok("a shop with no gates shares nothing", sharedChannelGates(d.as<JsonObjectConst>()).empty());
+  }
   printf("\n%d passed, %d failed\n", passed, failed);
   return failed ? 1 : 0;
 }

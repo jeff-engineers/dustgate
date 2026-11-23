@@ -101,6 +101,12 @@ const els = (t: Topology) => sys0(t).elements;
   check('...and leads with "the layout has a problem"',
     r.reason.startsWith('The layout has a problem'), r.reason);
 }
+{
+  // A problem the brain runs around is not a reason to send the person back to the canvas (D-88): Live names it instead.
+  const stale = mut(t => { (t as unknown as { controllers: Record<string, unknown>[] }).controllers[0]['chains'] = [['gone']]; });
+  const r = shopReadiness(stale);
+  check('a layout saved with problems is still ready', r.ready, r.reason);
+}
 
 // ── a document that is not a shop ───────────────────────────────────────────
 //

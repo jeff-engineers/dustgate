@@ -18,7 +18,7 @@ import { SERVO_CHANNELS_PER_BOARD } from '../gates/selector-types';
 import { clampBoardOf, clampOf } from './shop-doc';
 import * as model from '@device-model';
 import type { Topology } from '@topology';
-import { portEnabled, portsByMachine, systemsOf, validateShop, type Shop } from '@shop';
+import { layoutGate, portEnabled, portsByMachine, systemsOf, type Shop } from '@shop';
 import { createTopologyDevice, settleAtBoot, setCollectorManual, setMachinePower, statusView as topoStatus, machineThreshold, type TopologyDevice, type TopologyStatus } from '@topology-device';
 import { DEMO_TOPOLOGY } from './demo-topology';
 import type { SerialChunk } from '../boards/serial-log';
@@ -203,9 +203,9 @@ export class DemoApiService extends ApiService {
   }
 
   override async putTopology(topology: Topology): Promise<{ ok: boolean }> {
-    // A shop only, like the mock and the firmware.
-    const v = validateShop(topology);
-    if (!v.ok) throw new Error('invalid topology: ' + JSON.stringify(v.errors));
+    // Refused only when it is not a shop at all, like the mock and the brains (LayoutGate.h, D-88).
+    const why = layoutGate(topology);
+    if (why) throw new Error(why);
     // A save is not a reboot: the running tools, the blowers and the gates the save left alone carry over, as on the brains.
     // From nothing (no layout before): settle it, one gate open per system, as both brains do.
     this.td = this.td ? createTopologyDevice(topology, this.td) : settleAtBoot(createTopologyDevice(topology));

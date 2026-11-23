@@ -350,9 +350,7 @@ function reconcile(d, nowMs, reassert = null) {
     if (!c) continue;
     if (wanted.has(sys.id)) {
       // Route this system to the winners and close the rest of ITS selectors.
-      for (const sel of T.selectorsOf(S.systemView(shop, sys))) {
-        if (sel.id in routing.states) d.actuatorStates[sel.id] = routing.states[sel.id];
-      }
+      applyRoute(d, T.selectorsOf(S.systemView(shop, sys)), routing.states);
       if (!c.on) c.onSinceMs = nowMs;   // the spin-up clock starts at the command
       c.on = true;
       c.coasting = false;      // a machine is running here again — coast is moot
@@ -429,8 +427,25 @@ function openAPath(d, sys) {
   if (!target) return;   // a system with no machines has nothing to open toward
 
   const routing = S.routeShop(shop, [target]);
+  applyRoute(d, sels, routing.states);
+}
+
+/**
+ * Send a system's gates where a route wants them — except a gate that shares a servo channel with another (D-88), which is
+ * never moved. When the route needs one of those OPEN, the whole system holds where it is: the brain fails that make like
+ * one on a lost board and keeps the last open gate open (D-85), and holding is the simulation's honest picture of that.
+ * Mirrors drivable() and the shared-channel branch of TopologyRuntime::issueFrom.
+ */
+function applyRoute(d, sels, states) {
+  const shared = S.sharedChannelGates(d.topology);
+  const opensShared = sels.some((sel) => {
+    if (!shared.has(sel.id) || !(sel.id in states)) return false;
+    const closed = T.closedState(sel);
+    return !closed || states[sel.id] !== closed.id;
+  });
+  if (opensShared) return;
   for (const sel of sels) {
-    if (sel.id in routing.states) d.actuatorStates[sel.id] = routing.states[sel.id];
+    if (sel.id in states && !shared.has(sel.id)) d.actuatorStates[sel.id] = states[sel.id];
   }
 }
 
@@ -476,9 +491,7 @@ function settleAtBoot(d) {
       .find((mid) => (ports.get(mid) || []).some((pp) => pp.systemId === sys.id && S.portEnabled(pp.port)));
     if (!target) continue;
     const routing = S.routeShop(shop, [target]);
-    for (const sel of T.selectorsOf(S.systemView(shop, sys))) {
-      if (sel.id in routing.states) d.actuatorStates[sel.id] = routing.states[sel.id];
-    }
+    applyRoute(d, T.selectorsOf(S.systemView(shop, sys)), routing.states);
   }
   return d;
 }
@@ -528,10 +541,11 @@ function reassertFor(d, machineId) {
 //   { code, severity: 'bad'|'warn', subject: {type, id}, text, forMs? }
 //
 // Codes: move-failed, board-offline, collector-no-start, collector-needs-start, collector-blind,
-// rf-gave-up, rf-send-failed, plug-unreachable, plug-replaced, board-fault.
+// rf-gave-up, rf-send-failed, plug-unreachable, plug-replaced, board-fault, gate-shares-channel.
 //
 // MATCHED PAIR with TopologyRuntime::writeStatus for the two codes DERIVED from
-// the plug reading — collector-no-start and collector-blind — and bin-full from the beam, text included,
+// the plug reading — collector-no-start and collector-blind — bin-full from the beam and gate-shares-channel from the
+// layout, text included,
 // asserted in problems.test.js ↔ test_problems.cpp. The rest are RAISED by
 // firmware that has something the model lacks (a link, a transmitter), and the
 // mock/demo stage them with setProblem().
@@ -545,6 +559,8 @@ const PROBLEM_TEXT = {
   // A full bin is a fact the beam reports, not an inference, so it is red and an instruction (2026-10-10). Every board on
   // the system blinks red for it too (the ALERT frame); this is the row that says what the blinking means.
   binFull: "The dust bin is full — empty it before the next cut.",
+  // Two gates on one board port (D-88): neither is moved, so the person is told how to fix it. kProblemSharedChannel.
+  sharedChannel: "Wired to the same board port as another gate, so DustGate won't move either — give each gate its own port on the layout.",
 };
 
 function setProblem(d, key, problem) { d.staged[key] = problem; }
@@ -571,6 +587,9 @@ function problemsView(d, systems) {
     const bin = collectorBinView(d, sysId);
     if (bin && bin.full) out.push({ code: 'bin-full', severity: 'bad', subject: { type: 'system', id: sysId }, text: PROBLEM_TEXT.binFull });
   }
+  // Sorted: the brain keeps them in a std::set, so its order is the ids' order.
+  for (const id of [...S.sharedChannelGates(d.topology)].sort())
+    out.push({ code: 'gate-shares-channel', severity: 'bad', subject: { type: 'selector', id }, text: PROBLEM_TEXT.sharedChannel });
   for (const key of Object.keys(d.staged)) out.push(d.staged[key]);
   return out;
 }
