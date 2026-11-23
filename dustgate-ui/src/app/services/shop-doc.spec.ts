@@ -15,7 +15,7 @@ import {
   addMachineWithPort, addSupplementalPort, addSystem, displayName, isPortEnabled, isShopDoc, machineById,
   collectorOf, machineIdOfPort, machineOfPort, machinesOf, outletExcludes, outletOf,
   outletTakenByAnotherMachine,
-  portsOf, primaryPortOf, removeMachine, removePort,
+  portsOf, primaryPortOf, removeMachine, removePort, dropFromChains,
   healMachineNames, renameMachine, setOutlet, clampUsers, clampOffered, planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf,
   systemById, systemLabel, systemViews, systemsInLayoutOrder, systemsOf, toShop,
 } from './shop-doc';
@@ -124,6 +124,36 @@ const oneSystem = () => JSON.parse(JSON.stringify({
   eq('...no machines', machinesOf(big).length, 0);
   eq('...boards stay paired', big.controllers.length, 1);
   check('...and it validates', validateShop(big).ok, JSON.stringify(validateShop(big).errors));
+}
+
+// ── a gone gate leaves no board's chain (2026-11-23: "chain names sel13, which is not a gate" refused a save) ──
+{
+  const chained = (chains: string[][] = [['gate', 'gate2']]) => {
+    const shop = toShop(oneSystem() as never)!;
+    addSystem(shop, { system: 'sys2', collector: 'dc2' });
+    systemById(shop, 'sys2')!.elements.push({ id: 'gate2', type: 'selector', kind: 'servoGate', name: 'G2', controllerId: 'bus',
+                                               states: [], branches: [{ id: 'b1', opensState: 'open', role: 'tool' }] });
+    shop.controllers.push({ id: 'bus', role: 'node', name: 'Serial 1', drives: 'bus', chains });
+    return shop;
+  };
+  const chainsOf = (shop: ShopDoc) => (shop.controllers.find(c => c['id'] === 'bus') as RawEl)['chains'];
+  const notAGate = (shop: ShopDoc) => validateShop(shop).errors.filter(e => /which is not a gate/.test(e.message));
+
+  const one = chained([['gate', 'gate2'], ['gate3']]);
+  dropFromChains(one.controllers, 'gate2');
+  eq('a gate comes off its chain, the others keep their order', chainsOf(one), [['gate'], ['gate3']]);
+  dropFromChains(one.controllers, 'gate3');
+  eq('an emptied last chain goes', chainsOf(one), [['gate']]);
+  dropFromChains(one.controllers, 'gate');
+  eq('and so does the list once every chain is empty', chainsOf(one), undefined);
+
+  const sys = chained();
+  removeSystem(sys, 'sys2');
+  eq('deleting a system takes its gates off every chain', chainsOf(sys), [['gate']]);
+  eq('...and the save check finds no stale name', notAGate(sys), []);
+  const all = chained();
+  clearShop(all);
+  eq('Clear shop leaves no chain naming a gate', chainsOf(all), undefined);
 }
 
 // ── the plug lives on the machine ───────────────────────────────────────────

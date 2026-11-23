@@ -679,13 +679,28 @@ export function clearShop(doc: ShopDoc): SystemRemoval | null {
   return plan;
 }
 
-/** Drop these element ids and any duct touching them, across every system. */
+/** Drop these element ids, any duct touching them and any board chain naming them, across every system. */
 function dropElements(doc: ShopDoc, ids: Set<string>): void {
   for (const s of systemsOf(doc)) {
     s.elements = s.elements.filter(e => !ids.has(e['id'] as string));
     s.ducts = s.ducts.filter(d => !ids.has(d['child'] as string) && !ids.has(d['parent'] as string));
   }
+  for (const id of ids) dropFromChains(doc.controllers ?? [], id);
 }
+
+/** Take a gate off every board's chains: a gate is on one chain of one board at most, and a gate that is gone is on
+ *  none (the validator refuses a chain naming a gate the shop no longer has). Empty trailing chains go, and so does an
+ *  empty `chains`. Mutates the controllers in place, as the canvas edits its document. */
+export function dropFromChains(controllers: RawEl[], gateId: string): void {
+  for (const c of controllers) {
+    const chains = c['chains'] as string[][] | undefined;
+    if (!Array.isArray(chains)) continue;
+    const kept = chains.map((x) => x.filter((id) => id !== gateId));
+    while (kept.length && !kept[kept.length - 1].length) kept.pop();
+    if (kept.length) c['chains'] = kept; else delete c['chains'];
+  }
+}
+
 
 /**
  * Remove a SUPPLEMENTAL port. Refuses anything else, and says so by returning

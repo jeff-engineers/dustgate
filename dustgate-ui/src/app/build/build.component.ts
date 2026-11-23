@@ -23,7 +23,7 @@ import {
   type ShopDoc, type ShopSystem,
   addMachineWithPort, addSupplementalPort, addSystem, clampOf, isPortSupplemental, machineById, machineOfPort,
   machinesOf, NEW_MACHINE_NAME, outletExcludes, outletOf, portsOf, primaryPortOf, setOutlet,
-  removeMachine, removePort,
+  removeMachine, removePort, dropFromChains,
   renameMachine,
   supplementalCount,
   systemById, systemsOf, systemViews, toShop, clampOffered, clampBoardOf, clampTakenBy,
@@ -4632,14 +4632,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private writeBinding(gateId: string, boardId: string, ch: number): void {
     const el = this.elem(gateId); if (!el) return;
-    // Off every chain first: a gate is on one chain of one board at most.
-    for (const c of this.controllersRaw()) {
-      const chains = c['chains'] as string[][] | undefined;
-      if (!Array.isArray(chains)) continue;
-      const kept = chains.map((x) => x.filter((id) => id !== gateId));
-      while (kept.length && !kept[kept.length - 1].length) kept.pop();
-      if (kept.length) c['chains'] = kept; else delete c['chains'];
-    }
+    dropFromChains(this.controllersRaw(), gateId);   // off every chain first
     if (isChainPort(ch)) {
       // To the END of the chain on that port: the next socket along. Its servo number travels with it (numbers are
       // shop-wide), so a valve recabled to another bus board keeps its servo.
@@ -5110,6 +5103,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     } else {
       this.setElems(this.elems(this.topo).filter(e => e['id'] !== id));
     }
+    dropFromChains(this.controllersRaw(), id);        // a deleted gate stays on no board's chain
     this.cells.delete(id);
     // Removing a leg can leave the tee it hung off as a 1-child pass-through —
     // collapse it so the run heals and the branch point becomes addable again.
