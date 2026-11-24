@@ -25,6 +25,7 @@
               "@topology",
               "@topology-device",
               "@shop",
+              "@shop-edit",
               "@plug-claim",
               "@plug-identity"
             ],
