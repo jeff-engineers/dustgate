@@ -26,6 +26,8 @@ console.info = (...a: unknown[]) => { infos.push(a); };
      'a tool is running - wait until the shop is quiet');
   eq('a refused layout names its first issue', failureReason({ status: 400, error: { error: 'invalid topology', errors: [{ message: 'systems not an array' }] } }),
      'systems not an array');
+  eq('...in the guide bar words, with how many more', failureReason({ status: 400, error: { error: 'invalid topology',
+     errors: [{ message: 'system "s2": systems not an array' }, { message: 'second' }] } }), 'systems not an array (and 1 more)');
   eq('a string answer', failureReason({ status: 400, error: 'bad tool' }), 'bad tool');
   eq('an HTML answer is not a reason', failureReason({ status: 502, error: '<html>Bad Gateway</html>' }), 'the shop brain refused it (HTTP 502)');
   eq('a bare refusal still says something', failureReason({ status: 500, error: null }), 'the shop brain refused it (HTTP 500)');

@@ -136,7 +136,7 @@ export const DEMO_TOPOLOGY: Topology = {
       role: "secondary",
       name: "ShopVac node",
       board: "xiao_c5",
-      drives: "linear",
+      drives: "bus",
       link: {
         transport: "wifi-ws",
         host: "dustgate-slider-1"

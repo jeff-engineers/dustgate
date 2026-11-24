@@ -19,6 +19,7 @@ import {
   healMachineNames, renameMachine, setOutlet, clampUsers, clampOffered, planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf,
   systemById, systemLabel, systemViews, systemsInLayoutOrder, systemsOf, toShop,
 } from './shop-doc';
+import { DEMO_TOPOLOGY } from './demo-topology';
 
 const { check, eq, report } = suite();
 // A one-system shop: a gate, and a table saw on it whose plug is on its machine.
@@ -124,6 +125,13 @@ const oneSystem = () => JSON.parse(JSON.stringify({
   eq('...no machines', machinesOf(big).length, 0);
   eq('...boards stay paired', big.controllers.length, 1);
   check('...and it validates', validateShop(big).ok, JSON.stringify(validateShop(big).errors));
+}
+
+// ── the demo seed is a valid shop (2026-11-23: a stale `drives: "linear"` left the public demo's Live view dead) ──
+{
+  const demo = toShop(JSON.parse(JSON.stringify(DEMO_TOPOLOGY)) as never)!;
+  const v = validateShop(demo);
+  check('the demo shop validates as it ships', !!demo && v.ok, JSON.stringify(v.errors));
 }
 
 // ── a gone gate leaves no board's chain (2026-11-23: "chain names sel13, which is not a gate" refused a save) ──

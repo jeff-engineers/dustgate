@@ -16,6 +16,8 @@
 //
 // Angular-free on purpose (see tsconfig.spec.json): an HttpErrorResponse is read by its shape, not imported.
 
+import { wipSummary, type ValidationIssue } from './wip-message';
+
 /** The parts of a failed request this reads. An HttpErrorResponse has all of them; a local Error has `message`. */
 interface FailureShape { status?: number; error?: unknown; message?: string; url?: string | null }
 
@@ -29,13 +31,13 @@ export function noAnswer(e: unknown): boolean {
 }
 
 /** The brain's own words, from whichever shape its answer took: a string, {error}, {error, errors:[{message}]}, or
- *  {message}. A layout it refused names its first issue rather than the generic "invalid topology". */
+ *  {message}. A layout it refused is said the way the canvas guide bar says it (wipSummary: the first issue in a
+ *  woodworker's words, and how many more) rather than the generic "invalid topology" or the validator's raw text. */
 function answerText(body: unknown): string {
   if (typeof body === 'string') return body.trim().startsWith('<') ? '' : body;
   if (!body || typeof body !== 'object') return '';
-  const b = body as { error?: unknown; errors?: { message?: unknown }[]; message?: unknown };
-  const first = Array.isArray(b.errors) && typeof b.errors[0]?.message === 'string' ? b.errors[0].message as string : '';
-  if (first) return first;
+  const b = body as { error?: unknown; errors?: ValidationIssue[]; message?: unknown };
+  if (Array.isArray(b.errors) && typeof b.errors[0]?.message === 'string') return wipSummary(null, b.errors);
   if (typeof b.error === 'string') return b.error;
   if (typeof b.message === 'string') return b.message;
   return '';
