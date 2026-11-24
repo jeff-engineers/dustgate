@@ -6,7 +6,6 @@ const { jeffsShop, BOARDS } = require('./_shop');
 const { moveGate, boardDrives } = require('./_edit');
 
 module.exports = {
-  knownBroken: 'a refused move wedges the brain mid-transition (TODO.md "A refused move wedges the shop")',
   title: "03 Reflash the sander's board from PWM to serial, then re-wire its gate",
   async run(ctx) {
     const { bench } = ctx;
@@ -21,7 +20,7 @@ module.exports = {
       await ctx.sleep(3000);
     });
     const p = (await bench.problems()).problems || [];
-    ctx.expect(p.some((x) => /sander/i.test(x.text)), 'the app says something about the sander gate');
+    ctx.expect(p.some((x) => x.subject?.id === 'sanderGate' && /Re-wire it on the canvas/.test(x.text)), 'the app says the sander gate needs re-wiring, and how');
     await ctx.step('switch off the sander', async () => { bench.power('sander', 0); await bench.until(() => !bench.plugs.collector.on, 15000); });
     await ctx.step('the saw still works meanwhile', async () => { bench.power('saw', 600); await bench.until(async () => (await bench.status()).actuators.sawGate === 'open' && bench.plugs.collector.on); });
     ctx.expect(bench.plugs.collector.on, 'the saw still gets suction');

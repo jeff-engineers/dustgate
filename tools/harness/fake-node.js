@@ -53,15 +53,21 @@ class FakeNode {
     const ws = new WebSocket(`ws://127.0.0.1:${this.port}/nodelink`);
     this.ws = ws;
     ws.on('open', () => ws.send(JSON.stringify(NL.join(this.id))));
-    ws.on('message', (raw) => this._onFrame(JSON.parse(String(raw))));
+    // Only the CURRENT socket answers and redials. A socket dropped by stop()/reflash() closes later, asynchronously; if
+    // its close redialled too, the board would dial twice and answer on whichever socket it opened last.
+    ws.on('message', (raw) => { if (ws === this.ws) this._onFrame(JSON.parse(String(raw))); });
     ws.on('error', () => {});
     ws.on('close', () => {
+      if (ws !== this.ws) return;
       this.online = false;
       if (!this.stopped) setTimeout(() => this._dial(), 300);   // a real node redials too
     });
   }
 
-  _send(f) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(f)); }
+  _send(f) {
+    if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(f));
+    else if (process.env.HARNESS_VERBOSE) console.log(`[fake ${this.id}] could not send ${f.t}: the socket is not open`);
+  }
 
   _onFrame(f) {
     switch (f.t) {
