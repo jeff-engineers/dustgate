@@ -90,6 +90,18 @@ jobs:
         run: make -C native
       - name: End-to-end tests (fake nodes, fake plugs)
         run: make -C native test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: tools/package-lock.json
+      - name: Install tools deps
+        run: npm ci
+        working-directory: tools
+      # Jeff's shop as scenarios: rearranging it, reflashing a board, a board dropping off, a brain restart, a reset.
+      - name: Shop scenarios (tools/harness)
+        run: npm run harness
+        working-directory: tools
 
   firmware:
     name: Firmware compile
