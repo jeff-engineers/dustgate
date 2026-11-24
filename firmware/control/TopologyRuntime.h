@@ -807,8 +807,14 @@ public:
                 // Failed like a gate on an unlinked board, so the failed-make rules (D-85) hold the blower the same way —
                 // but not kept in `_stuck`: gate-shares-channel already says why, and a second row would only repeat it.
                 _failed.push_back(FailedMove{sysId, m.selectorId, m.toState, "shares a servo channel with another gate", m.isBreak});
+            } else if (cid.empty() && !b) {
+                // A gate NOT WIRED to a board (2026-11-23, shop-edit.js unwireGate): legal, routed as closed, and said
+                // plainly — it is the person's answer to "this board changed under the gate", not a fault. A brain with
+                // servo pads of its own (the frozen ESP32 primary) still reads no board as its own pads (NodeBus
+                // busForController); the Pi has none, so there it is simply not wired.
+                fail("it isn't wired to a board. Wire it to one on the canvas");
             } else if (!_bus->onlineFor(sel)) {
-                fail("controller offline");
+                fail("its board is offline");
             } else if (!_bus->setState(m.selectorId.c_str(), sel, m.toState.c_str())) {
                 const char* why = b ? b->refusal() : nullptr;
                 fail(why ? why : "actuator rejected move");

@@ -29,6 +29,7 @@ import {
   systemById, systemsOf, systemViews, toShop, clampOffered, clampBoardOf, clampTakenBy,
   planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf, collectorOf, type SystemRemoval,
 } from '../services/shop-doc';
+import { unwireGate, replaceBoard } from '@shop-edit';
 import { layoutWarning } from '../services/layout-warning';
 import { failureReason, noAnswer, reportFailure, reportNote, QuietPoll } from '../services/failure';
 import {
@@ -296,7 +297,7 @@ const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 type Fitting = SelKind | 'tool' | 'duct';
 type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'secondaryPort'
               | 'addSystem' | 'findBoards' | 'rename' | 'moveSystem' | 'system' | 'boardSetup'
-              | 'unpairBoard' | 'deleteSystem' | 'addServo';
+              | 'unpairBoard' | 'deleteSystem' | 'addServo' | 'replaceBoard' | 'replaceWith';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -414,7 +415,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
           /** The board whose "Move to system" list is showing. A drill-down rather
            *  than a fly-out submenu: the menu is a flat list of rows on purpose, and
            *  a nested panel on a phone is a target you cannot hold open. */
-          moveBoard?: string } | null = null;
+          moveBoard?: string;
+          /** The board whose "Replace with" list is showing: the same drill-down. */
+          replaceBoard?: string } | null = null;
   /** The one option list, resolved once when the menu opens (see openMenu). */
   menuOptions: MenuOption[] = [];
   menuTitle = '';
@@ -2522,6 +2525,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (!ctx.convert) this.selectedId = null;
     this.menu = { x, y, ...ctx };
     this.menuTitle = ctx.moveBoard ? 'Draw it beside'
+                   : ctx.replaceBoard ? 'Replace it with'
                    : ctx.board ? (this.boardName(ctx.board) || 'This board')
                    : ctx.canvas ? 'This shop'
                    : ctx.convert ? this.convertTitle(ctx.convert)
@@ -2648,6 +2652,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private resolveOptions(): MenuOption[] {
     const m = this.menu; if (!m) return [];
     if (m.moveBoard) return this.moveBoardOptions(m.moveBoard);
+    if (m.replaceBoard) return this.replaceBoardOptions(m.replaceBoard);
     if (m.board) return this.boardOptions(m.board);
     if (m.canvas) return this.canvasOptions();
     if (m.convert) return this.convertOptions(m.convert);
@@ -2765,6 +2770,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       { kind: 'moveSystem', label: 'Move to system…', enabled: systems.length > 1,
         note: systems.length > 1 ? undefined : 'only one system' },
       { kind: 'boardSetup', label: 'Board setup…', enabled: true, note: 'channels' },
+      // A dead board swapped for a new one, in one step (2026-11-23): its gates, clamps and collector jobs move over.
+      { kind: 'replaceBoard', label: 'Replace with another board…', enabled: inUse, note: inUse ? 'its gates move with it' : 'nothing on it' },
       // A bus board's servos are added here too (jeff, 2026-11-01): it is where the gate was just cabled to it.
       ...(this.isBusBoard(id) ? [{ kind: 'addServo' as const, label: 'Add a servo…', enabled: gates > 0,
             note: gates ? 'one new servo at a time' : 'cable a gate to it first' }] : []),
@@ -2782,6 +2789,52 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const c = this.controllersRaw().find(x => x['id'] === id);
     if (!c || c['role'] === 'primary') return false;
     return !this.nodeLinks.some(l => l.id === id);
+  }
+
+  /** The boards that could take this one's place: every other board on the layout, and every paired board not on it
+   *  yet (a new board, just paired). Only a board of the same kind — a serial board cannot drive PWM gates, and a
+   *  replacement that left every gate refusing to move would be no replacement. */
+  private replaceBoardOptions(id: string): MenuOption[] {
+    const board = (cid: string) => this.controllersRaw().find((c) => c['id'] === cid) as RawEl;
+    const kind = this.drivesOf(board(id));
+    const out: MenuOption[] = [];
+    const seen = new Set<string>([id]);
+    for (const c of this.controllersRaw()) {
+      const cid = c['id'] as string;
+      if (seen.has(cid) || c['role'] === 'primary') continue;
+      seen.add(cid);
+      const same = this.drivesOf(c) === kind;
+      // A board that drives gates of its own is not offered: two gates would land on one channel.
+      const busy = this.topo ? selectorsOnController(this.topo, cid).length > 0 : false;
+      out.push({ kind: 'replaceWith', label: this.boardName(cid) || cid, enabled: same && !busy, value: cid,
+                 note: !same ? 'a different kind of board' : busy ? 'has gates of its own' : this.isUnpairedBoard(cid) ? 'not paired' : 'on the layout' });
+    }
+    for (const l of this.nodeLinks) {
+      if (!l.id || seen.has(l.id)) continue;
+      seen.add(l.id);
+      const same = (drivesFromCaps(l.caps) ?? 'servo') === kind;
+      out.push({ kind: 'replaceWith', label: l.name || l.host || l.id, enabled: same, value: l.id,
+                 note: same ? 'paired, not drawn yet' : 'a different kind of board' });
+    }
+    if (!out.length) out.push({ kind: 'replaceWith', label: 'No other board', enabled: false, note: 'pair the new one from Boards first' });
+    return out;
+  }
+
+  /** Replace a board with another, through the shared edit (shop-edit.js replaceBoard): its gates, chains, clamps,
+   *  collector jobs and canvas cell move to `newId`, and `oldId` leaves the layout. Undo takes it back. */
+  private replaceBoardWith(oldId: string, newId: string): void {
+    const link = this.nodeLinks.find((l) => l.id === newId);
+    const known = this.controllersRaw().some((c) => c['id'] === newId);
+    const entry = known || !link ? undefined
+      : { role: 'secondary', name: this.boardName(oldId) || link.name || newId, board: link.board,
+          link: { transport: 'wifi-ws', host: link.host || newId } };
+    replaceBoard(this.topo as never, oldId, newId, entry as Record<string, unknown> | undefined);
+    const cell = this.boardCells.get(oldId);
+    this.boardCells.delete(oldId);
+    if (cell && !this.boardCells.has(newId)) this.boardCells.set(newId, cell);
+    this.dirty = true; this.saveError = ''; this.saveNote = ''; this.saveWarn = '';
+    this.ensureBoardCells();
+    this.syncNodes();
   }
 
   /** The systems a board can be drawn beside.
@@ -2906,6 +2959,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.openMenu(m.x, m.y, { moveBoard: m.board });
       return;
     }
+    if (kind === 'replaceBoard' && m.board) {
+      this.openMenu(m.x, m.y, { replaceBoard: m.board });
+      return;
+    }
     this.pushHistory(null);
     if (m.canvas) {
       this.closeMenu();
@@ -2915,6 +2972,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (m.moveBoard) {
       const id = m.moveBoard; this.closeMenu();
       if (kind === 'system' && o.value) this.moveBoardToSystem(id, o.value);
+      return;
+    }
+    if (m.replaceBoard) {
+      const id = m.replaceBoard; this.closeMenu();
+      if (kind === 'replaceWith' && o.value) this.replaceBoardWith(id, o.value);
       return;
     }
     if (m.board) {
@@ -3762,8 +3824,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.api.deviceInfo?.role !== 'native') return false;
     const c = this.controllersRaw().find(x => x['id'] === id);
     if (!c || c['role'] !== 'primary') return false;
-    const fallback = this.defaultControllerId();
-    return !this.allElems().some(e => e['type'] === 'selector' && ((e['controllerId'] as string) ?? fallback) === id);
+    return !this.allElems().some(e => e['type'] === 'selector' && e['controllerId'] === id);
   }
 
   /** Every paired board stands somewhere, keeping whatever cell was saved. Stale
@@ -3880,7 +3941,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       // would hand the same channel out twice.
       for (const e of this.allElems()) {
         if (e['type'] !== 'selector') continue;
-        if (((e['controllerId'] as string) ?? fallback) !== id) continue;
+        if (e['controllerId'] !== id) continue;   // a gate not wired is on no board
         if (this.drivesOf(c) === 'bus' || e['kind'] !== 'linear') servoCount++;
       }
       // A PI BRAIN IS NOT A BOARD ON THE CANVAS (2026-10-11): it has no pads, so it drives no gate and holds no clamp,
@@ -4052,10 +4113,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.chainsOf(boardId).forEach((chain, k) => { if (chain.length) used.set(BUS_CHAIN_PORT + k, chain[0]); });
       return used;
     }
-    const fallback = this.defaultControllerId();
     for (const e of this.allElems()) {
       if (e['type'] !== 'selector') continue;
-      if (((e['controllerId'] as string) ?? fallback) !== boardId) continue;
+      if (e['controllerId'] !== boardId) continue;   // a gate not wired is on no board
       if (e['kind'] === 'linear') { used.set(SERVO_PORTS, e['id'] as string); continue; }
       used.set(((e['servo'] as RawEl | undefined)?.['channel'] as number) ?? 0, e['id'] as string);
     }
@@ -4177,11 +4237,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   /** Level with the gate's top edge, not its centre — see gateTabs(). */
   private tabY(n: NodeVM): number { return this.ny(n) - this.halfH(n); }
+  /** The board a gate is wired to, or '' for a gate NOT WIRED to any (shop-edit.js unwireGate). Never a default: a gate
+   *  with no board drawn on one was the canvas wiring it back by itself, with no way for a person to say otherwise
+   *  (Jeff, 2026-11-23: "there was no way to break a blue line link"). */
   private boardOf(gateId: string): string {
-    return ((this.elem(gateId)?.['controllerId'] as string) ?? this.defaultControllerId());
+    return (this.elem(gateId)?.['controllerId'] as string) ?? '';
   }
   private channelOf(gateId: string): number {
     const board = this.boardOf(gateId);
+    if (!board) return -1;
     if (this.isBusBoard(board)) {
       const k = this.chainsOf(board).findIndex((c) => c.includes(gateId));
       return k < 0 ? -1 : BUS_CHAIN_PORT + k;
@@ -4546,6 +4610,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       this.bindGate(moving, d.over.boardId, d.over.channel);
       return;
     }
+    // DROPPED ON NOTHING: the cable is pulled out. From a gate's tab, that gate; from a board's port, the gate on it. The
+    // gate stays in the shop, NOT WIRED, until it is plugged in somewhere (shop-edit.js unwireGate) — the way out when a
+    // board changed under it, without deleting the gate or inventing a socket.
+    if (d.mode === 'toPort' && !d.over && d.gateId && this.boardOf(d.gateId)) {
+      this.pushHistory(null);
+      this.unplug(d.gateId);
+      return;
+    }
+    if (d.mode === 'toGate' && !d.overGate && !d.over) {
+      const pulled = this.rosterFor(d.port!.boardId).get(d.port!.channel);
+      if (pulled) { this.pushHistory(null); this.unplug(pulled); }
+      return;
+    }
     const gateId = d.mode === 'toPort' ? d.gateId! : d.overGate;
     const target = d.mode === 'toPort' ? d.over : d.port!;
     if (!gateId || !target) return;
@@ -4625,9 +4702,17 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     const holder = isChainPort(ch) ? undefined : this.rosterFor(boardId).get(ch);
     if (holder && holder !== gateId) {
       const was = { board: this.boardOf(gateId), ch: this.channelOf(gateId) };
-      this.writeBinding(holder, was.board, was.ch);
+      // The gate being plugged in came from nowhere (it was not wired), so the one it displaces is unplugged, not sent
+      // to a made-up socket.
+      if (was.board) this.writeBinding(holder, was.board, was.ch); else unwireGate(this.topo as never, holder);
     }
     this.writeBinding(gateId, boardId, ch);
+    this.dirty = true; this.saveError = ''; this.saveNote = ''; this.saveWarn = '';
+    this.syncNodes();
+  }
+  /** Pull a gate's cable out: the gate stays, NOT WIRED (shop-edit.js unwireGate). */
+  private unplug(gateId: string): void {
+    unwireGate(this.topo as never, gateId);
     this.dirty = true; this.saveError = ''; this.saveNote = ''; this.saveWarn = '';
     this.syncNodes();
   }
@@ -5008,7 +5093,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // already wired to, and its channel where it had one. Rebuilding from scratch
     // would hand a gate on a secondary back to the primary — silently unwiring it
     // from the board someone chose in "Set up this gate".
-    const controllerId = (el['controllerId'] as string | undefined) ?? this.defaultControllerId();
+    const controllerId = (el['controllerId'] as string | undefined) ?? '';   // a gate not wired stays not wired
     const channel = ((el['servo'] as RawEl | undefined)?.['channel'] as number | undefined)
       ?? firstFreeChannel(this.topo, controllerId, id) ?? 0;
     const fresh = this.makeSelector(kind, { controllerId, channel });

@@ -24,6 +24,7 @@
 import type { Topology } from '@topology';
 import type { Shop } from '@shop';
 import { portsByMachine, portEnabled, systemView } from '@shop';
+import { unchain } from '@shop-edit';
 
 export type RawEl = Record<string, unknown>;
 
@@ -688,17 +689,9 @@ function dropElements(doc: ShopDoc, ids: Set<string>): void {
   for (const id of ids) dropFromChains(doc.controllers ?? [], id);
 }
 
-/** Take a gate off every board's chains: a gate is on one chain of one board at most, and a gate that is gone is on
- *  none (the validator refuses a chain naming a gate the shop no longer has). Empty trailing chains go, and so does an
- *  empty `chains`. Mutates the controllers in place, as the canvas edits its document. */
+/** Take a gate off every board's chains. One owner: shop-edit.js `unchain` (root CLAUDE.md, "Architecture rules"). */
 export function dropFromChains(controllers: RawEl[], gateId: string): void {
-  for (const c of controllers) {
-    const chains = c['chains'] as string[][] | undefined;
-    if (!Array.isArray(chains)) continue;
-    const kept = chains.map((x) => x.filter((id) => id !== gateId));
-    while (kept.length && !kept[kept.length - 1].length) kept.pop();
-    if (kept.length) c['chains'] = kept; else delete c['chains'];
-  }
+  unchain({ controllers }, gateId);
 }
 
 

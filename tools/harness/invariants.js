@@ -4,6 +4,7 @@
 // Checked against the boards themselves (where the fake nodes last put each gate) and the plugs (whether the collector's
 // switch is on), not only against what the brain says, so "the brain thinks it's open" is not mistaken for "it's open".
 'use strict';
+const { danglingRefs } = require('../../shared/device-model/shop-edit.js');
 
 function selectors(doc) {
   const out = [];
@@ -69,6 +70,9 @@ async function check(bench, doc, opts = {}) {
     for (const r of n.refused) if (!(opts.allowRefused || []).includes(r.selectorId))
       broken.push(`board ${n.id} refused to move ${r.selectorId}: ${r.why}`);
   }
+
+  // 6a. Nothing in the saved layout points at a gate or board it no longer has (shop-edit.js REFS).
+  for (const d of danglingRefs(doc)) broken.push(`the layout still names ${d.kind} "${d.id}" in ${d.where}, which is gone`);
 
   // 6. Every problem the brain raises is about something in the layout (nothing left over from before an edit).
   const ids = new Set();

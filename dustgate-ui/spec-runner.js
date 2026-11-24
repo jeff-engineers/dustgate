@@ -37,6 +37,7 @@ const ALIASES = {
   // the two exports it uses at the call site.
   '@topology-fixtures': '../shared/device-model/topology.fixtures.js',
   '@shop': '../shared/device-model/shop.js',
+  '@shop-edit': '../shared/device-model/shop-edit.js',
   '@device-model': '../shared/device-model/device-model.js',
 };
 

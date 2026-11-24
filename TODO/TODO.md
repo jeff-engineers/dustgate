@@ -29,9 +29,12 @@ are in `TODO/audit-2026-11-23.md`. The big cuts there (ESP32 brain, RF, PWM) are
    its state folder, and raise a problem a person sees if it still can't.
 4. **The brain writes into the saved layout** (a plug's learned MAC; a Shelly's `kind` dropped). Two writers to one
    document is what the ownership rule forbids; decide which owns plug identity before the model operations land.
-5. **One owner per kind of thing** in `shared/device-model`: the reference registry and the operations (add, remove,
-   move, rename, replace a board, unwire a gate), with "not wired" a legal state for a gate; then the app and the
-   harness call them instead of editing the document (the harness's `scenarios/_edit.js` is the stand-in).
+5. **One owner per kind of thing** in `shared/device-model/shop-edit.js` (started 2026-11-24). Done: the reference
+   registry (`REFS`, `danglingRefs`), `unwireGate` / `wireGate` / `replaceBoard`, "not wired" a legal state for a
+   gate (routed as closed; the brain says "it isn't wired to a board"); the canvas unplugs a gate when its cable is
+   dropped on nothing and offers "Replace with another board…"; the harness checks nothing dangles after every step.
+   Next: the canvas's own gate binding (`writeBinding`, the servo-number travel) and its deletes onto these operations,
+   then the other screens (Boards, gate setup, tool setup) — `scenarios/_edit.js` still writes two edits by hand.
 
 ## Pi bring-up (started 2026-10-06; the Pi runs the shop since 2026-10-11)
 

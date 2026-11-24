@@ -1,23 +1,21 @@
-// _edit.js — the layout edits the scenarios make, by hand for now. The point of the restructure (TODO/audit) is that
-// these become the shared model's own operations, the same ones the app calls; until then each is written out here,
-// which is exactly the duplication the audit names. Each returns a fresh copy.
+// _edit.js — the layout edits the scenarios make. Where the shared model has the operation (shop-edit.js), this calls
+// it, so a scenario exercises the same code the app does; the rest are still written out here until shop-edit.js grows
+// them (TODO.md, "One owner per kind of thing"). Each returns a fresh copy.
 'use strict';
+const E = require('../../../shared/device-model/shop-edit.js');
 const clone = (d) => JSON.parse(JSON.stringify(d));
 const elems = (d) => d.systems.flatMap((s) => s.elements);
 const el = (d, id) => elems(d).find((e) => e.id === id);
 const board = (d, id) => d.controllers.find((c) => c.id === id);
 
-/** Put a gate on another board: a PWM channel, or a bus servo number. Off every chain first. */
-function moveGate(doc, gateId, boardId, where) {
-  const d = clone(doc);
-  const g = el(d, gateId);
-  for (const c of d.controllers) if (c.chains) { c.chains = c.chains.map((x) => x.filter((i) => i !== gateId)).filter((x) => x.length); if (!c.chains.length) delete c.chains; }
-  g.controllerId = boardId;
-  const { referenceAngle, detented, holdAtRest } = g.servo || {};
-  g.servo = { ...where, referenceAngle, detented, ...(holdAtRest !== undefined ? { holdAtRest } : {}) };
-  if (where.bus !== undefined) { const b = board(d, boardId); b.chains = b.chains || [[]]; b.chains[0].push(gateId); }
-  return d;
-}
+/** Put a gate on another board: a PWM channel, or a bus servo number. */
+function moveGate(doc, gateId, boardId, where) { return E.wireGate(clone(doc), gateId, boardId, where); }
+
+/** Unplug a gate from its board, leaving it in the shop. */
+function unwireGate(doc, gateId) { return E.unwireGate(clone(doc), gateId); }
+
+/** Swap one board for another (a dead board replaced by a new one). */
+function replaceBoard(doc, oldId, newId) { return E.replaceBoard(clone(doc), oldId, newId); }
 
 /** Say a board is now flashed as a bus board (or back to PWM). */
 function boardDrives(doc, boardId, drives) {
@@ -46,4 +44,4 @@ function removeBoard(doc, boardId) {
   return d;
 }
 
-module.exports = { moveGate, boardDrives, removeToolAndGate, removeBoard, el, board, clone };
+module.exports = { moveGate, unwireGate, replaceBoard, boardDrives, removeToolAndGate, removeBoard, el, board, clone };

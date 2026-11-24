@@ -422,7 +422,8 @@ function validateTopology(t, opts = {}) {
     if (!SELECTOR_KINDS.includes(sel.kind)) err('selector', `bad kind "${sel.kind}"`, ref);
     if (sel.controllerId && !ctrlIds.has(sel.controllerId))
       err('selector', `controllerId "${sel.controllerId}" does not resolve`, ref);
-    else if (!sel.controllerId) err('selector', 'selector missing controllerId', ref);
+    // No controllerId is legal (2026-11-23): a gate NOT WIRED to a board yet (shop-edit.js unwireGate). It routes as
+    // closed and the brain says so; refusing the layout is what left Jeff unable to unplug a gate from a reflashed board.
 
     if (sel.controllerId) {
       if (sel.kind === 'linear') hostLinear.set(sel.controllerId, (hostLinear.get(sel.controllerId) || 0) + 1);
