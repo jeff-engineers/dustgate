@@ -12,6 +12,31 @@ reasoning was contested, or that a still-open item above leans on.
 here until 2026-09-17 and had grown to 144 lines — longer than most of the
 active sections above them, which is how a parked item stops being read.
 
+## Now: a shop that can be rearranged without a fight (started 2026-11-23)
+
+Jeff's priority until it holds: rearranging the shop (moving gates, reusing or reflashing boards, adding and removing
+tools) works without a reset. The rules are in root `CLAUDE.md` ("Architecture rules"); the evidence and the longer list
+are in `TODO/audit-2026-11-23.md`. The big cuts there (ESP32 brain, RF, PWM) are deferred.
+
+1. **The scenario harness** (`tools/harness`, `npm run harness`): Jeff's shop as it stands, against the real native brain
+   with fake boards and plugs; seven scenarios so far. Next: more of what Jeff does at the bench (rearranging servos
+   along a chain, a plug that changes address, two tools at once), then randomized edit sequences.
+2. **A refused move wedges the shop** (harness `03`, known broken). When a board refuses a SET (a gate left on a board
+   reflashed to another kind), the brain records the gate as moved, records the old gate as closed without sending the
+   close, and stays `transitioning` for good; the shop keeps reporting gates wrong even after the gate is re-wired. The
+   only message is "The board refused the move." It should: keep the old gate open (make-before-break), mark the move
+   failed, and say what to do ("The sander's gate is set up as a PWM servo, but its board is a serial board now. Re-wire
+   the gate on the canvas.").
+3. **A rebooted board is refused as a duplicate** until the brain notices the old link died ("JOIN … already linked,
+   refused as a duplicate", seen in harness `03`). The newest link from a board should replace the old one.
+4. **A brain that can't save its layout only logs it** ("it is adopted but will be lost at a restart"); it should create
+   its state folder, and raise a problem a person sees if it still can't.
+5. **The brain writes into the saved layout** (a plug's learned MAC; a Shelly's `kind` dropped). Two writers to one
+   document is what the ownership rule forbids; decide which owns plug identity before the model operations land.
+6. **One owner per kind of thing** in `shared/device-model`: the reference registry and the operations (add, remove,
+   move, rename, replace a board, unwire a gate), with "not wired" a legal state for a gate; then the app and the
+   harness call them instead of editing the document (the harness's `scenarios/_edit.js` is the stand-in).
+
 ## Pi bring-up (started 2026-10-06; the Pi runs the shop since 2026-10-11)
 
 Goal for now: **run the shop without the Mac**, with no fixed address anywhere. **Steps 1-4 done 2026-10-06** (Pi Zero 2 W, Trixie, `dustgate.local`): the brain runs on the Pi with the shop's layout and plugs, and all six nodes found it by beacon with nobody touching them. Steps 5-7 need someone in the shop. Steps, in order; each says
