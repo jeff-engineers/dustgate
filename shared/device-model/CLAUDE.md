@@ -38,7 +38,7 @@ can't be found. This table says WHY each is a pair. **A new pair goes in both pl
 | `bareHost` / `isOwnBoard` / `sameBoard` (board-id.js) | the same (BoardId.h) | the ONE rule for "which board is this id"; the C++ is the reference |
 | `PROBLEM_TEXT` (topology-device.js) | `kProblem*` (TopologyRuntime.h) | the problem texts derived from the collector's reading, asserted literally |
 
-**Not pairs, deliberately** (exist once, change alone): `kMoveTimeoutMs` (NodeLink.h — the primary's own wait, never on
+**Not pairs, deliberately** (exist once, change alone): `shop-edit.js` (the edits a person makes; the brain never edits a layout, so it has no C++ twin), `kMoveTimeoutMs` (NodeLink.h — the primary's own wait, never on
 the wire; must exceed `HOMING_TIMEOUT_MS`, which the node static_asserts), `HOMING_TIMEOUT_MS` (derived from the rail
 and speed; `HOMING_MAX_TRAVEL_MM` must exceed the largest rack's `spanMm`), `kBinDebounceMs`, the CT sampling cadence
 and learned floor (`sensing/CtTrip.h`, one file shared by node and primary — never copy it). `firmware/test/shim/Arduino.h`

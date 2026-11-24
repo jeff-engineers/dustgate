@@ -338,7 +338,7 @@ int main(int argc, char** argv) {
       rt.setMachinePower("toolX", 200);
       drain(rt, {&local, &ghost});
       ok("offline node → move recorded as failed",
-         rt.failedMoves().size() == 1 && rt.failedMoves()[0].reason == "controller offline",
+         rt.failedMoves().size() == 1 && rt.failedMoves()[0].reason == "its board is offline",
          rt.failedMoves().empty() ? "<none>" : rt.failedMoves()[0].reason);
       ok("offline node → no command issued", ghost.log.empty());
 
