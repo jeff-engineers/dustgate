@@ -88,6 +88,11 @@ public:
     // Non-blocking: completion is observed through busy().
     virtual bool setState(const char* selectorId, JsonObjectConst sel, const char* stateId) = 0;
 
+    // Once busy() has cleared: did that move fail to land (refused, timed out, lost)? A bus that cannot tell says no.
+    virtual bool lastMoveFailed() const { return false; }
+    // Why the last setState() returned false, in words for a person (a gate on a board that cannot drive it), or nullptr.
+    virtual const char* refusal() const { return nullptr; }
+
     // Pump any deferred work. Called every main-loop pass.
     virtual void update() {}
 

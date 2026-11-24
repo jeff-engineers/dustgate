@@ -4,6 +4,7 @@
   "description": "Dev tools for DustGate \u2014 mock API server and provisioning utilities",
   "scripts": {
     "mock": "node mock-api.js",
+    "harness": "node harness/run.js",
     "conformance": "node ../shared/device-model/conformance.js",
     "conformance:ci": "node mock-api.js & MOCK_PID=$!; sleep 2; node ../shared/device-model/conformance.js; RC=$?; kill $MOCK_PID; exit $RC",
     "ui:fresh": "node check-ui-fresh.js",

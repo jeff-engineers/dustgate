@@ -629,6 +629,20 @@ bool RemoteActuatorBus::busy() const {
     flushSink();
     return r;
 }
+const char* RemoteActuatorBus::refusal() const {
+    if (!_mutex) return nullptr;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const char* r = _s.refusal();   // a string literal: safe to hand out past the lock
+    xSemaphoreGive(_mutex);
+    return r;
+}
+bool RemoteActuatorBus::lastMoveFailed() const {
+    if (!_mutex) return false;
+    xSemaphoreTake(_mutex, portMAX_DELAY);
+    const bool r = _s.lastMoveFailed();
+    xSemaphoreGive(_mutex);
+    return r;
+}
 bool RemoteActuatorBus::setState(const char* selectorId, JsonObjectConst sel, const char* stateId) {
     if (!_mutex) return false;
     xSemaphoreTake(_mutex, portMAX_DELAY);

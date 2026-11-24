@@ -89,10 +89,31 @@ cd tools && npm run model:test       # every JS model suite + the constant-pairs
 cd tools && npm run firmware:test    # every C++ host test
 cd tools && npm run docs:check       # links in current docs, archive banners, CLAUDE.md size
 make -C native test                  # the native brain, end to end against fakes
+cd tools && npm run harness          # the shop as scenarios against the real native brain (after make -C native)
 cd tools && npm run conformance:ci   # also topology:conformance:ci, nodelink:conformance:ci — run separately
 ```
 
 Firmware builds and environments: `firmware/CLAUDE.md`. Deploying the Pi: `bash native/pi/deploy.sh <user>@dustgate.local`.
+
+## Architecture rules (jeff, 2026-11-23)
+
+Rearranging the shop kept breaking because each edit cleaned up after itself by hand, and the paths disagreed. These hold
+for every layer; the audit (`TODO/audit-2026-11-23.md`) says where the code doesn't meet them yet.
+
+- **One owner per kind of thing.** A gate, board, machine, plug, clamp or system is created, moved, renamed and removed
+  by ONE operation in the shared model; screens and the brain call it, never assign or filter its references
+  themselves. A bigger edit composes smaller ones: deleting a system removes each of its gates through the gate's own
+  removal.
+- **Every place an id can appear is declared once**, beside its owner. A new kind of reference is added there in the
+  same change, and a test fails if any operation leaves an id dangling.
+- **One record per fact; everything else is derived.** What a board, servo or plug should be doing is worked out from
+  the layout and corrected (reconciled), never patched by a special path that a reset, a reflash or an unpair can miss.
+- **The layout can always say what's true**, including "not decided yet" (a gate not wired to a board). The app never
+  auto-repairs what a person is in the middle of changing.
+- **Every way a person changes the shop is a harness scenario** (`tools/harness`). A bug found at the bench gets a
+  scenario that fails before its fix.
+- **Every problem a person sees says what happened, what it means for their tools, and what to do**, with no terminal,
+  reflash or shop reset in the answer.
 
 ## Design constraints
 
