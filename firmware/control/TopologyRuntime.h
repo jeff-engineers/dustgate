@@ -724,7 +724,20 @@ public:
         // Moves of one board keep their queue order: once one waits, the board's later ones wait behind it.
         for (auto it = _inFlight.begin(); it != _inFlight.end();) {
             ActuatorBus* b = _bus->busForController(it->second.controllerId.c_str());
-            if (!b || !b->busy()) it = _inFlight.erase(it); else ++it;
+            if (b && b->busy()) { ++it; continue; }
+            // A MOVE THE BOARD DID NOT MAKE IS NOT MADE (2026-11-23, harness 03). The gate was recorded at its new state
+            // when the move was sent; a board that refused it (a gate drawn as a PWM servo on a board reflashed to serial),
+            // timed out or lost the link left it somewhere unknown. Counted as moved, a refused OPEN let make-before-break
+            // close the old gate behind it and dead-headed the collector. Unknown is not open, so the old gate is held
+            // open by the never-close-the-last-visible-open rule below, and the move is failed like one that could not
+            // start, which is what holds the blower (D-85) and puts it on the status.
+            if (b && b->lastMoveFailed()) {
+                FailedMove f{it->second.systemId, it->first, it->second.toState, "its board did not move it", !it->second.isMake};
+                _failed.push_back(f);
+                _stuck[it->first] = f;
+                _hwStates[it->first] = std::string();
+            }
+            it = _inFlight.erase(it);
         }
         trackLostBoards(nowMs);
         keepAVisiblePath();
@@ -797,12 +810,13 @@ public:
             } else if (!_bus->onlineFor(sel)) {
                 fail("controller offline");
             } else if (!_bus->setState(m.selectorId.c_str(), sel, m.toState.c_str())) {
-                fail("actuator rejected move");
+                const char* why = b ? b->refusal() : nullptr;
+                fail(why ? why : "actuator rejected move");
             } else {
                 _stuck.erase(m.selectorId);
                 _hwStates[m.selectorId] = m.toState;   // commanded → hardware truth
                 _lastMoveOnBoard[cid] = m.selectorId;
-                _inFlight[m.selectorId] = InFlightMove{sysId, cid, !m.isBreak};
+                _inFlight[m.selectorId] = InFlightMove{sysId, cid, !m.isBreak, m.toState};
             }
             it = q.erase(it);
         }
@@ -1083,6 +1097,15 @@ public:
         // board will have closed reads closed, and a fallback held open for a running blower reads open.
         for (const std::string& id : _presumedClosed) { auto h = _hwStates.find(id); if (h != _hwStates.end()) actuators[id] = h->second; }
         for (const std::string& id : _fallback) { auto h = _hwStates.find(id); if (h != _hwStates.end() && !h->second.empty()) actuators[id] = h->second; }
+        // EVERY GATE READS WHERE IT IS, not where routing wants it (2026-11-23, harness 03): a close held behind a refused
+        // open, or never planned because an idle shop rests where it is, left the status saying "closed" over a gate
+        // standing open. A gate moving reads its target (it is on its way); one whose move its board did not make reads
+        // unknown (null); a gate never commanded since boot keeps routing's word, as before.
+        for (auto& kv : _hwStates) {
+            if (_inFlight.count(kv.first)) continue;
+            if (kv.second.empty()) actuators[kv.first] = (const char*)nullptr;
+            else                   actuators[kv.first] = kv.second;
+        }
 
         // `tools` is keyed by MACHINE, not by port: it answers "what is running",
         // and what runs is a machine. A two-port saw appears once, as it should.
@@ -1260,7 +1283,7 @@ public:
         for (auto& kv : _stuck) {
             const FailedMove& f = kv.second;
             add("move-failed", f.isBreak ? "warn" : "bad", "selector", f.selectorId,
-                std::string("Move to ") + f.toState + " failed: " + f.reason, false, 0);
+                std::string("Couldn't move it to ") + f.toState + ": " + f.reason + ".", false, 0);
         }
         for (auto& kv : _raised)
             add(kv.second.code.c_str(), kv.second.severity.c_str(), kv.second.subjectType.c_str(),
@@ -2008,7 +2031,7 @@ private:
     // Which system owns the move currently in flight ("" = none). Only that
     // system's blower is held back by it.
     // The moves under way, one per board at most: selectorId → its system, its board, and whether it OPENS (see update()).
-    struct InFlightMove { std::string systemId, controllerId; bool isMake; };
+    struct InFlightMove { std::string systemId, controllerId; bool isMake; std::string toState; };
     std::map<std::string, InFlightMove>  _inFlight;
     void (*_say)(const std::string&) = nullptr;   // the shell's console, for the [TOOL] line (setSay)
     // Settling a layout loaded from nothing (settleAtBoot): systems still to settle, and their moves. Kept apart from

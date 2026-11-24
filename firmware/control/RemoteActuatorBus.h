@@ -125,6 +125,8 @@ public:
     bool online() const override;
     bool busy()   const override;
     bool setState(const char* selectorId, JsonObjectConst sel, const char* stateId) override;
+    bool lastMoveFailed() const override;
+    const char* refusal() const override;
     // Dial-out links are pumped on their own task; a node-initiated link has no task,
     // so its frames go out from here, on the main loop, and its ping with them.
     void update() override;

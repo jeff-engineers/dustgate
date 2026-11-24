@@ -130,7 +130,7 @@ public:
         // gate whose board has since forgotten it — and busy() is the shop-wide servo mutex, so EVERY gate stopped
         // moving until kMoveTimeoutMs (210 s). Bench 2026-10-06: the router-table node browned out mid-move and the
         // whole shop's gates froze behind it.
-        if (_moveOutstanding) _moveFault = "The board restarted mid-move \xE2\x80\x94 the gate may not have finished moving.";
+        if (_moveOutstanding) { _moveFault = "The board restarted mid-move \xE2\x80\x94 the gate may not have finished moving."; _lastMoveFailed = true; }
         _moveOutstanding = false;
         _jogOutstanding  = false;
         _lastRxMs     = now();    // the node just spoke; do not call it overdue before the WELCOME
@@ -148,7 +148,7 @@ public:
         _connected = false;
         // Drop any outstanding move: we can't know whether it landed, and holding busy() forever
         // would stall every other gate.
-        if (_moveOutstanding) _moveFault = "The link dropped mid-move \xE2\x80\x94 the gate may not have finished moving.";
+        if (_moveOutstanding) { _moveFault = "The link dropped mid-move \xE2\x80\x94 the gate may not have finished moving."; _lastMoveFailed = true; }
         _moveOutstanding = false;
         _jogOutstanding  = false;
         _txPending = false;
@@ -259,6 +259,7 @@ public:
         if (_moveOutstanding && (now() - _moveStartedMs) > nodelink::kMoveTimeoutMs) {
             _moveOutstanding = false;
             _moveFault = "The board never reported its move finished (timed out).";
+            _lastMoveFailed = true;
             say(label("[NODE] Move timed out on "));
         }
         if (_jogOutstanding && (now() - _jogStartedMs) > kJogTimeoutMs) _jogOutstanding = false;
@@ -299,6 +300,12 @@ public:
     // ── ActuatorBus, as the session answers it ──────────────────────────────
     bool online() const { return _connected && (now() - _lastRxMs) < nodelink::kPongTimeoutMs; }
     bool busy()   const { return _moveOutstanding || _txPending; }
+    // Did the last move NOT land: refused, timed out, reported short, or lost to a dropped link or a restart? Read once
+    // busy() clears, so routing never takes a move the board did not make as made (a refused open followed by the
+    // old gate's close dead-headed the collector: harness 03, 2026-11-23).
+    bool lastMoveFailed() const { return _lastMoveFailed; }
+    // Why the last setState() returned false without sending, in words for a person; nullptr when there is no such reason.
+    const char* refusal() const { return _refusal; }
     // A jog sent and not yet reported arrived. Kept apart from busy() on purpose (see jog()), and read only by the
     // calibration widget, through GET /api/linear/state, to send its next nudge after the servo has landed.
     bool jogging() const { return _jogOutstanding; }
@@ -313,8 +320,22 @@ public:
         // Resolve to a concrete angle / mm HERE, on the primary. The secondary gets a number, never
         // a state name it would have to interpret — see NodeLink.h.
         StaticJsonDocument<320> doc;
+        _refusal = nullptr;
         if (!nodelink::buildSetFrame(doc.to<JsonObject>(), ++_seq, selectorId, sel, stateId)) {
             return false;   // uncalibrated — refuse rather than send a guess
+        }
+        // A GATE ON A BOARD THAT CAN'T DRIVE IT is refused HERE, with the fix in words, rather than sent for the board to
+        // refuse (2026-11-23, harness 03): a board reflashed from PWM to serial keeps its name, so the layout still draws
+        // its gate as a PWM servo on it. The board's WELCOME says what it was flashed as; a board that has not said yet
+        // (caps unknown, both 0) is not second-guessed.
+        if (_capServos || _capBus) {
+            if (doc.containsKey("channel") && !_capServos)
+                _refusal = "it is set up as a PWM servo, but its board is a serial board now. Re-wire it on the canvas as a serial servo";
+            else if (doc.containsKey("bus") && !_capBus)
+                _refusal = "it is set up as a serial servo, but its board drives PWM servos. Re-wire it on the canvas to a serial board, or as a PWM servo";
+            else if (doc.containsKey("channel") && (doc["channel"] | 0) >= _capServos)
+                _refusal = "its board has fewer servo channels than the canvas shows. Move it to another channel on the canvas";
+            if (_refusal) return false;
         }
         // PWM only: a bus servo has no pulse to range, and a node refuses a SET that names a bus servo with one.
         if (_servoMinUs && _eq(doc["drive"], "servo") && doc.containsKey("channel")) { doc["minUs"] = _servoMinUs; doc["maxUs"] = _servoMaxUs; }
@@ -323,6 +344,7 @@ public:
         nodelink::strlcpy_(_txFrame, s.c_str(), sizeof(_txFrame));
         _txPending       = true;
         _moveOutstanding = true;
+        _lastMoveFailed  = false;
         _moveStartedMs   = now();
         // The whole frame, not a summary. When a gate doesn't move, the question is always "which of
         // us dropped it" — this line and the node's matching one answer it in one comparison.
@@ -685,7 +707,7 @@ private:
             return;
         }
         if (!ok) {
-            if (_moveOutstanding) _moveFault = "The board refused the move.";
+            if (_moveOutstanding) { _moveFault = "The board refused the move."; _lastMoveFailed = true; }
             _moveOutstanding = false;                       // refused → stop waiting
             _jogOutstanding  = false;
         }
@@ -776,6 +798,7 @@ private:
                     // (RemoteActuatorBus::health() hands out this pointer) can never run off the end mid-update.
                     std::snprintf(_moveFaultText, sizeof(_moveFaultText) - 1, "The gate did not get there: %s.", err);
                     _moveFault = _moveFaultText;
+                    _lastMoveFailed = true;
                 } else {
                     _moveFault = nullptr;
                 }
@@ -848,6 +871,8 @@ private:
     uint32_t _seq          = 0;
     int      _servoMinUs   = 0, _servoMaxUs = 0;   // the shop's servo pulse range; 0 = not set (SETs go without one)
     bool     _moveOutstanding = false;
+    bool        _lastMoveFailed = false;   // see lastMoveFailed()
+    const char* _refusal = nullptr;         // see refusal(); always a string literal
     const char* _moveFault    = nullptr;   // a static string, or _moveFaultText; see Health::moveFault
     char        _moveFaultText[nodelink::kMaxStateErrLen + 40] = "";   // a node's own reason (STATE.err), see onState()
     uint32_t _moveStartedMs   = 0;

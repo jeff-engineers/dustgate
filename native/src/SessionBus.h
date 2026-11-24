@@ -13,6 +13,8 @@ public:
     explicit SessionBus(topo::NodeSession& s) : _s(s) {}
     bool online() const override { return _s.online(); }
     bool busy() const override { return _s.busy(); }
+    bool lastMoveFailed() const override { return _s.lastMoveFailed(); }
+    const char* refusal() const override { return _s.refusal(); }
     bool setState(const char* id, JsonObjectConst sel, const char* st) override { return _s.setState(id, sel, st); }
     bool jog(int ch, int angle, bool detach) override { return _s.jog(ch, angle, detach); }
     void setServoPulseRange(int minUs, int maxUs) override { _s.setServoPulseRange(minUs, maxUs); }
