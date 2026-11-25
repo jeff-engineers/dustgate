@@ -42,7 +42,7 @@ import { type RoutedDuct, type Scene, Router, routeAllShared, sceneBounds } from
 import { CanvasViewport } from './canvas-viewport';
 import { fitText, plugLabel } from './plug-label';
 import {
-  type Drives, type PortShortfall, DEFAULT_DRIVES, applyDrivesCache, canHost, drivesFromCaps,
+  type Drives, type PortShortfall, DEFAULT_DRIVES, applyDrivesCache, boardCapacity, canHost, drivesFromCaps,
   drivesFromHasLinear, portShortfalls, resolveDrives, shortfallText,
   unpairPrompt, boardUses, boardInUse,
 } from '../boards/board-drives';
@@ -4189,11 +4189,10 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Amber, not red: a full board isn't broken, it's out of room. A slider board
    *  is full at one gate, because one rack IS its whole capacity. */
   boardFull(b: BoardVM): boolean {
-    return b.drives === 'bus' ? b.servoCount >= MAX_BUS_SERVOS_PER_HOST
-                                 : b.servoCount >= SERVO_PORTS;
+    return b.servoCount >= boardCapacity(b.drives);   // the one capacity rule (board-drives.ts, review §3.1)
   }
   /** How many gates this board can carry, for the "n/N" badge. */
-  portCapacity(b: BoardVM): number { return b.drives === 'bus' ? MAX_BUS_SERVOS_PER_HOST : SERVO_PORTS; }
+  portCapacity(b: BoardVM): number { return boardCapacity(b.drives); }
   /** ...and how many it is carrying. */
   portUsedCount(b: BoardVM): number {
     return b.servoCount;

@@ -14,7 +14,7 @@
 import {
   type Drives, DEFAULT_DRIVES, applyDrivesCache, canHost,
   drivesFromCaps, drivesFromHasLinear, portShortfalls, resolveDrives, shortfallText,
-  boardInUse, boardUses, unpairPrompt,
+  boardInUse, boardUses, unpairPrompt, boardCapacity, boardRoomText,
 } from './board-drives';
 import type { Topology } from '@topology';
 import { validateTopology } from '@topology';
@@ -219,6 +219,17 @@ group('B6 unpair is offered on any board; the layout keeps a board it still uses
      /its 2 gates still use it\. .* move them/.test(unpairPrompt('X', 'x', { gates: 2, others: [] })));
   ok('a board nothing uses is simply forgotten',
      /Pair it again from Boards\.$/.test(unpairPrompt('Spare', 'dustgate-spare', { gates: 0, others: [] })));
+}
+
+// ── B7 · one answer to "how much does this board drive" (review §3.1, 2026-11-25) ──
+group('B7 the canvas and Boards read a board\'s room from one rule');
+{
+  ok('a serial board holds six', boardCapacity('bus') === 6);
+  ok('a PWM board holds two', boardCapacity('servo') === 2);
+  ok('a brain with no pins holds none, whatever it is cached as', boardCapacity('bus', true) === 0 && boardCapacity('servo', true) === 0);
+  ok('a serial board says so, with its count', boardRoomText('bus', 2) === 'serial servos · 2 of 6', boardRoomText('bus', 2));
+  ok('a PWM board says so, with its count', boardRoomText('servo', 1) === 'PWM servos · 1 of 2', boardRoomText('servo', 1));
+  ok('the Pi brain says it drives nothing itself', /drives no gates itself/.test(boardRoomText('servo', 0, true)));
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`);

@@ -60,6 +60,25 @@ export function canHost(drives: Drives, kind: string): boolean {
 export const BUS_SERVOS_PER_BOARD = 6;
 
 /**
+ * HOW MUCH A BOARD DRIVES, in one place (review §3.1, 2026-11-25). The canvas badge, the Boards subtitle and every other
+ * "n of N" read these; they used to work it out each on their own and showed one board three ways ("0/6" on the canvas,
+ * "servo valves · 0 of 2 gates" on Boards, "4 servo channels" in the scan).
+ *
+ * `noPins` is a brain with no servo pins of its own (the Pi): it drives nothing, whatever a cache or a default says.
+ */
+export function boardCapacity(drives: Drives, noPins = false): number {
+  if (noPins) return 0;
+  return drives === 'bus' ? BUS_SERVOS_PER_BOARD : SERVO_CHANNELS_PER_BOARD;
+}
+
+/** What a board drives and how full it is, in the words a person reads: "serial servos · 2 of 6", "PWM servos · 1 of 2",
+ *  or, for a brain with no pins, that it drives none itself. */
+export function boardRoomText(drives: Drives, used: number, noPins = false): string {
+  if (noPins) return 'the brain — it drives no gates itself';
+  return `${drives === 'bus' ? 'serial servos' : 'PWM servos'} · ${used} of ${boardCapacity(drives)}`;
+}
+
+/**
  * Write the cache onto a controller entry, or clear it.
  *
  * 'servo' DELETES the field rather than storing it, so a document round-trips
