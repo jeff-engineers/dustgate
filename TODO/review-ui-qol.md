@@ -124,10 +124,7 @@ this is a phone app.
 **FIXED 2026-11-23** — Boards stops vouching for its boards when the brain stops answering
 
 ### 2.3 [M] Settings waits forever for a brain that is not there
-**Where:** `settings/settings.component.ts:400` ("Reading the shop's setting…"), `:373`.
-**What:** With the brain stopped the fail-closed field sits empty under "Reading the shop's setting…" indefinitely,
-and its Save is live.
-**Fix:** On failure say "Can't reach the brain"; disable that Save with the reason beside it.
+**FIXED 2026-11-23** — Settings says why it cannot read the shop's settings
 
 ### 2.4 [M] A canvas that could not load still draws a starter shop
 **FIXED 2026-11-23** — A canvas that could not load shows only that, and Try again
