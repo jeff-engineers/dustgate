@@ -448,7 +448,7 @@ export class ServoCalibrationComponent implements OnInit {
         : status === 501
           ? 'This board was built without servo support, so nothing will move. Reflash with servos enabled to calibrate.'
           : status === 404
-            ? 'This device doesn\'t have the servo jog endpoint yet — update its firmware to calibrate.'
+            ? 'This board\'s firmware is too old to move a gate from here. Update it from Boards, then try again.'
             // The brain's own reason when it gave one (D-84): "didn't answer" only when nothing answered. A bus board
             // that has dropped its link answers 502 "that board is not linked", which is not the brain being away.
             : `Couldn't move the gate: ${failureReason(e)}. Tap an arrow to try again.`;

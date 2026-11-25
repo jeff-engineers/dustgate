@@ -75,7 +75,7 @@ interface RawEl { [k: string]: unknown; }
 
       <div class="head">
         <span class="kind"><b>Tool:</b> {{ name || 'Unnamed' }}
-          <span class="sep">—</span> Device setup</span>
+          <span class="sep">—</span> how DustGate knows it's running</span>
         <span class="badge" [class.ok]="hasPlug && !!ip" [class.todo]="!hasPlug || !ip"
               [title]="hasPlug && ip
                  ? 'A smart outlet is paired, so DustGate sees when this runs.'

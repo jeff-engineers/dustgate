@@ -2884,7 +2884,8 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
         // sheet now sets up a current clamp, a bin sensor and — on a collector —
         // the remote that switches it, none of which are outlets. A label naming
         // one of the options is a label that hides the others.
-        label: paired ? 'Device' : 'Set up this device',
+        // Not "device" (Jeff, 2026-11-23: a tool is a tool): what the row sets up is how it is sensed or switched.
+        label: paired ? 'Plug or clamp' : (n.glyph === 'collector' ? 'How it starts' : 'How it is sensed'),
         enabled: true,
         note: paired ? undefined : (n.glyph === 'collector' ? 'started by hand' : 'switched by hand'),
       }];

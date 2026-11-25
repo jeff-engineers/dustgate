@@ -69,6 +69,8 @@ so "This board" is wrong there.
 board name with "runs the app" as its subtitle.
 
 ### 1.6 [M] "Device" for the sensing setup on a tool
+**PARTLY FIXED 2026-11-25** — the tool menu ("How it is sensed" / "Plug or clamp"), the sheet header, the jog error and
+the build stamp. Left: the tray title "Devices", which waits on Jeff (D-72).
 **Where:** canvas tool menu `Set up this device` / `Device` (`build/build.component.ts:2833`); the sheet header
 `Tool: New tool — Device setup` (`tools/element-outlet-config.component.ts:76`); the tray title `Devices`
 (`build.component.html:470`); `servo-calibration.component.ts:450` "This device doesn't have the servo jog endpoint
