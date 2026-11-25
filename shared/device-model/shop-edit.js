@@ -114,8 +114,43 @@ function wireGate(doc, gateId, boardId, where) {
     b.chains[0].push(gateId);
   } else {
     g[key].channel = where.channel;
+    // A PWM servo turns 180°: a whole-circle range left from a serial servo would let Set positions pick an angle the
+    // board refuses (the Planer valve, 2026-11-25).
+    if (typeof g[key].maxAngle === 'number' && g[key].maxAngle > 180) delete g[key].maxAngle;
   }
   return doc;
+}
+
+/**
+ * Tie a serial servo that is already on the gate's board, by its number, to that gate — the servo was answering on the
+ * bus but no gate named it (a gate re-drawn, or a layout restored, loses the number the servo still holds). Only the
+ * number is written: the gate keeps its board, its place on the chain and any positions already set, because it is the
+ * same servo on the same shaft. Refuses a number another gate holds.
+ */
+function setServoNumber(doc, gateId, n) {
+  const g = elementById(doc, gateId);
+  if (!isGate(g)) throw new Error(`no gate "${gateId}"`);
+  const holder = elementsOf(doc).find((e) => isGate(e) && e.id !== gateId && ((e.kind === 'linear' ? e.linear : e.servo) || {}).bus === n);
+  if (holder) throw new Error(`servo ${n} already turns ${holder.name || holder.id}`);
+  const key = g.kind === 'linear' ? 'linear' : 'servo';
+  g[key] = { ...(g[key] || {}), bus: n };
+  delete g[key].channel;
+  return doc;
+}
+
+/**
+ * Put an edited copy of an element back where it lives (its system's own `elements`), by id. A screen that edits a copy
+ * of a gate (Set positions) hands it back through here. The Gates page swapped it into the list `elementsOf` builds —
+ * a FRESH array — so the layout it then saved was the old one, and no gate set up there ever kept its positions
+ * (Jeff, 2026-11-25). Returns false when no system holds that id.
+ */
+function replaceElement(doc, updated) {
+  for (const s of systemsOf(doc)) {
+    const els = s.elements || [];
+    const i = els.findIndex((e) => e.id === updated.id);
+    if (i >= 0) { els[i] = updated; return true; }
+  }
+  return false;
 }
 
 /** Is this gate wired to a board? */
@@ -147,4 +182,4 @@ function replaceBoard(doc, oldId, newId, newBoard) {
   return doc;
 }
 
-module.exports = { REFS, refsTo, renameRefs, danglingRefs, unwireGate, wireGate, isWired, replaceBoard, unchain };
+module.exports = { REFS, refsTo, renameRefs, danglingRefs, unwireGate, wireGate, setServoNumber, replaceElement, isWired, replaceBoard, unchain };

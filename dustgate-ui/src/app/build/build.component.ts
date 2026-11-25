@@ -4746,7 +4746,12 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // One stepper driver per board, so a sliding gate's channel is always 0 — the
     // port index it was dropped on is the strip position, not the driver number.
     if (el['kind'] === 'linear') el['linear'] = { ...(el['linear'] as RawEl ?? {}), channel: 0 };
-    else el['servo'] = { ...(el['servo'] as RawEl ?? {}), channel: ch };
+    else {
+      const sv: RawEl = { ...(el['servo'] as RawEl ?? {}), channel: ch };
+      // A PWM servo turns 180°: drop a whole-circle range left from a serial servo (as shop-edit.js wireGate does).
+      if (typeof sv['maxAngle'] === 'number' && (sv['maxAngle'] as number) > 180) delete sv['maxAngle'];
+      el['servo'] = sv;
+    }
   }
 
   /** The cable while a drag is in flight. Dashed — it is a gesture until you let go —

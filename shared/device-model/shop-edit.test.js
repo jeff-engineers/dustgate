@@ -57,9 +57,34 @@ valid('the fixture', shop());
   const g = d.systems[0].elements.find((e) => e.id === 'g1');
   check('...it names the board and its servo number, and no channel', g.controllerId === 'bus' && g.servo.bus === 7 && !('channel' in g.servo));
   eq('...on the end of the chain', d.controllers[2].chains, [['g2', 'g3', 'g1']]);
+  d.systems[0].elements.find((e) => e.id === 'g1').servo.maxAngle = 359;
   const back = E.wireGate(d, 'g1', 'pwm', { channel: 1 });
+  check('...and drops a whole-circle range a PWM servo cannot turn', !('maxAngle' in back.systems[0].elements.find((e) => e.id === 'g1').servo));
   valid('wire it back as a PWM servo', back);
   eq('...off the chain again', back.controllers[2].chains, [['g2', 'g3']]);
+}
+
+{ // tie a servo already on the bus to the gate that lost its number
+  const d = shop();
+  delete d.systems[0].elements.find((e) => e.id === 'g3').servo.bus;
+  E.setServoNumber(d, 'g3', 4);
+  valid('tie servo 4 to a gate with none', d);
+  const g = d.systems[0].elements.find((e) => e.id === 'g3');
+  check('...it names servo 4 and keeps its positions', g.servo.bus === 4 && g.servo.referenceAngle === 10);
+  eq('...and stays where it is on its chain', d.controllers[2].chains, [['g2', 'g3']]);
+  let refused = '';
+  try { E.setServoNumber(d, 'g3', 3); } catch (e) { refused = e.message; }
+  check("a number another gate holds is refused, saying whose", /already turns g2/.test(refused), refused);
+}
+
+{ // an edited copy of a gate goes back into the layout itself
+  const d = shop();
+  const copy = JSON.parse(JSON.stringify(d.systems[0].elements.find((e) => e.id === 'g1')));
+  copy.servo.referenceAngle = 42;
+  check('replaceElement finds the gate in its system', E.replaceElement(d, copy));
+  check('...and the LAYOUT now has the new positions, not a copy of it', d.systems[0].elements.find((e) => e.id === 'g1').servo.referenceAngle === 42);
+  check('an id no system holds is refused', !E.replaceElement(d, { id: 'nope' }));
+  valid('after putting the gate back', d);
 }
 
 { // replace a board
