@@ -5,6 +5,7 @@ import { FormsModule } from '@angular/forms';
 import { servoPulseRange } from '@shop';
 import { ApiService, JogRefusedError } from '../services/api.service';
 import type { Topology } from '@topology';
+import { defaultMaxAngle } from '@topology';
 import {
   ServoSelector, ServoState,
   absoluteAngles, applyAbsoluteAngles, isCalibrated,
@@ -243,7 +244,7 @@ export class ServoCalibrationComponent implements OnInit {
     this.labels = positionLabels(this.topo, this.sel);
     const sv = this.sel.servo;
     this.lo = typeof sv?.minAngle === 'number' ? sv.minAngle : 0;
-    this.hi = typeof sv?.maxAngle === 'number' ? sv.maxAngle : 180;
+    this.hi = typeof sv?.maxAngle === 'number' ? sv.maxAngle : defaultMaxAngle(sv);   // a serial servo turns a whole circle
     // A value saved by an older build still wins; otherwise the build-wide default.
     this.reversed = sv?.reversed ?? SERVO_HANDED_REVERSED;
     // A CALIBRATED gate starts from what it was taught — every one of those angles

@@ -58,11 +58,16 @@ static const uint32_t kPollMs        = 20;     // how often a moving servo is re
 static const uint32_t kSlackMs       = 3000;   // added to the time the move should take before it is called stopped short
 static const uint32_t kSilentMs      = 1000;   // a moving servo that has not answered for this long is not answering
 
+// DIRECTION (jeff, 2026-11-25): a bigger angle turns a serial servo the SAME way as a PWM one. The ST3215 counts the
+// other way round, so with counts = degrees every serial gate in the shop turned backwards against its PWM twin mounted
+// the same way. Mirrored HERE, both ways, so every angle above the board (the layout, the brain, the app, the BUS
+// report) means one direction for every servo. Positions set before this change point the other way: set them again.
 inline uint16_t degToCounts(int deg) {
     long c = ((long)deg * 4096L + 180L) / 360L;
-    return (uint16_t)(c < 0 ? 0 : c > 4095 ? 4095 : c);
+    c = c < 0 ? 0 : c > 4095 ? 4095 : c;
+    return (uint16_t)((4096L - c) % 4096L);
 }
-inline float countsToDeg(uint16_t c) { return (float)c * 360.0f / 4096.0f; }
+inline float countsToDeg(uint16_t c) { return (float)((4096u - (c % 4096u)) % 4096u) * 360.0f / 4096.0f; }
 
 /** What a finished move says: where it was going and, if it did not get there, why — in a sentence for a person. */
 struct Ended {

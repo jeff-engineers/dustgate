@@ -17,6 +17,13 @@
 
 'use strict';
 
+const { MAX_BUS_ANGLE } = require('./nodelink.js');
+
+/** A servo's top angle when the layout names none: a serial (bus) servo turns a whole circle, a PWM servo 180°. One rule,
+ *  read by both resolvers below, the C++ servoCommandAngle (TopologyRouter.h) and the Set positions screen. A bus valve
+ *  tied without its range opened was clamped to 180 and could not reach open (2026-11-25). */
+function defaultMaxAngle(sv) { return sv && sv.bus !== undefined ? MAX_BUS_ANGLE : 180; }
+
 // ── Enums (mirror the schema doc) ───────────────────────────────────────────
 const CONTROLLER_ROLES = ['primary', 'secondary'];
 const ELEMENT_TYPES    = ['collector', 'selector', 'tool', 'junction'];
@@ -226,7 +233,7 @@ function servoCommandAngle(sel, stateId) {
   const sv = sel.servo || {};
   const ref = typeof sv.referenceAngle === 'number' ? sv.referenceAngle : 0;
   const lo  = typeof sv.minAngle === 'number' ? sv.minAngle : 0;
-  const hi  = typeof sv.maxAngle === 'number' ? sv.maxAngle : 180;
+  const hi  = typeof sv.maxAngle === 'number' ? sv.maxAngle : defaultMaxAngle(sv);
   return Math.min(hi, Math.max(lo, ref + st.offsetDeg));
 }
 
@@ -276,7 +283,7 @@ function applyAbsoluteAngles(sel, captured) {
 
   const sv = sel.servo || {};
   const lo = typeof sv.minAngle === 'number' ? sv.minAngle : 0;
-  const hi = typeof sv.maxAngle === 'number' ? sv.maxAngle : 180;
+  const hi = typeof sv.maxAngle === 'number' ? sv.maxAngle : defaultMaxAngle(sv);
 
   const states = [];
   for (const s of sel.states) {
@@ -1027,4 +1034,5 @@ module.exports = {
   collectorOf, collectorBoard, selectorsOf, toolsOf, closedState, servoCommandAngle,
   absoluteAngles, applyAbsoluteAngles,
   validateTopology, airflowIssues, redundantSelectors,
+  defaultMaxAngle,
 };

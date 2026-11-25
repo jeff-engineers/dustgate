@@ -12,6 +12,8 @@ export function servoCommandAngle(sel: unknown, stateId: string): number | null;
 
 /** stateId → commanded angle, for seeding the calibration widget. */
 export function absoluteAngles(sel: unknown): Record<string, number> | null;
+/** A servo's top angle when the layout names none: 359 for a serial (bus) servo, 180 for PWM. */
+export function defaultMaxAngle(servo: { bus?: number } | null | undefined): number;
 
 export interface ApplyAnglesResult<T = unknown> { ok: boolean; selector?: T; error?: string; }
 /** Fold captured absolute angles back into referenceAngle + per-state offsetDeg. */

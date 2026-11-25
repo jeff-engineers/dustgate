@@ -252,7 +252,9 @@ inline int servoCommandAngle(JsonObjectConst sel, const char* stateId) {
       JsonObjectConst sv = sel["servo"];
       int ref = sv["referenceAngle"] | 0;
       int lo  = sv["minAngle"] | 0;
-      int hi  = sv["maxAngle"] | 180;
+      // A serial (bus) servo turns a whole circle, a PWM servo 180° — when the layout names no range. defaultMaxAngle()
+      // in topology.js is the twin; 359 is nodelink kMaxBusAngle (this header cannot include NodeLink.h, which includes it).
+      int hi  = sv["maxAngle"] | (sv.containsKey("bus") ? 359 : 180);
       int ang = ref + s["offsetDeg"].as<int>();
       if (ang < lo) ang = lo;
       if (ang > hi) ang = hi;
