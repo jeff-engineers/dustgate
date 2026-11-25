@@ -119,10 +119,7 @@ this is a phone app.
 **FIXED 2026-11-23** — A list that failed to load says so, and no longer claims to be empty
 
 ### 2.2 [H] Boards says nothing when the brain is down
-**Where:** `boards/board-setup.component.ts` — `refreshLinks()` failures go to `QuietPoll` only (`:858-866`).
-**What:** With the brain stopped, Boards still showed "This board" with its green dot and no message. The screen a
-person opens to ask "is it connected?" says yes.
-**Fix:** After two failed polls, grey every dot and show the same "Can't reach the brain" bar Live has.
+**FIXED 2026-11-23** — Boards stops vouching for its boards when the brain stops answering
 
 ### 2.3 [M] Settings waits forever for a brain that is not there
 **Where:** `settings/settings.component.ts:400` ("Reading the shop's setting…"), `:373`.

@@ -212,6 +212,11 @@ interface BoardRow {
     </div>
     <p class="note" *ngIf="bulkNote">{{ bulkNote }}</p>
 
+    <!-- THE BRAIN IS NOT ANSWERING (review §2.2): the screen a person opens to ask "is it connected?" kept every green dot
+         from its last good reading. After two missed refreshes the dots go grey and this says why. -->
+    <p class="err" *ngIf="brainAway">Can't reach the brain. These boards are shown as they were last seen; the dots come
+      back when it answers.</p>
+
     <!-- Boards already in the layout -->
     <div class="card" *ngIf="rows.length">
       <div class="row" *ngFor="let r of rows; trackBy: rowKey">
@@ -595,8 +600,9 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   }
 
   // ── display ───────────────────────────────────────────────────────────────
-  isOnline(r: BoardRow): boolean { return r.primary || !!r.link?.online; }
-  isOffline(r: BoardRow): boolean { return !r.primary && !r.link?.online; }
+  // With the brain not answering, no board is known to be on or off: every dot goes grey (neither class).
+  isOnline(r: BoardRow): boolean { return !this.brainAway && (r.primary || !!r.link?.online); }
+  isOffline(r: BoardRow): boolean { return !this.brainAway && !r.primary && !r.link?.online; }
   /** Can the shop lose this board without losing a gate or a collector's job? The rule is the model's (shop.js). */
   isOptional(r: BoardRow): boolean { return !r.primary && !!this.topo && isOptionalBoard(this.topo, r.id); }
 
@@ -856,8 +862,12 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   // ── internals ─────────────────────────────────────────────────────────────
   private readonly statusPoll = new QuietPoll('Boards · status refresh');
   private readonly linksPoll = new QuietPoll('Boards · board list refresh');
+  /** Board-list refreshes missed in a row; two or more and the brain is called away (brainAway). */
+  private missedLinks = 0;
+  get brainAway(): boolean { return this.missedLinks >= 2; }
   private async refreshLinks(): Promise<void> {
-    try { this.links = await this.api.getNodes(); this.linksPoll.ok(); } catch (e) { this.linksPoll.fail(e); }   // leave the last known state
+    try { this.links = await this.api.getNodes(); this.linksPoll.ok(); this.missedLinks = 0; }
+    catch (e) { this.linksPoll.fail(e); this.missedLinks++; }   // leave the last known state, but stop vouching for it
     // The primary is a board too, and it is NOT in `nodes` — a clamp at the
     // collector is the likeliest first one in a shop, and without this it is the
     // only one this screen could not show.
