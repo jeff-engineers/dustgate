@@ -474,10 +474,9 @@
      and any name-match hint are in the tooltip. They were on the chip at first
      and turned a glanceable strip into three rows of prose. -->
 <div class="tray" *ngIf="showTray" [class.armed]="armedTool">
-  <!-- "Devices", not "Outlets": one of the things in here is not an outlet. A
-       clamp is the first sensing device DustGate cannot FIND — it has no address
-       — so it is listed because a board declared it, and the row says which. -->
-  <span class="t">Devices</span>
+  <!-- "Outlets & CT clamps" (Jeff, 2026-11-25; D-72): both, because a clamp is not an outlet — it has no address and
+       is listed because a board declared it, and the row says which. Not "Devices": a tool is a tool. -->
+  <span class="t">Outlets &amp; CT clamps</span>
   <span class="n">{{ trayNote() }}</span>
   <div class="chips">
     <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
