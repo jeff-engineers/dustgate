@@ -21,7 +21,8 @@
   <!-- Leaving the canvas is a top-level intent, not an "other action" — burying
        it in the overflow made the way out the hardest thing on the bar. Import
        and Export stay there: both are rare, and neither is how you finish. -->
-  <button routerLink="/shop">Done</button>
+  <!-- Done KEEPS what you did: it saves, then leaves (review §4.2). A save that fails stays here, with its reason. -->
+  <button (click)="done()" [disabled]="saving">Done</button>
   <button class="ico" (click)="moreOpen = !moreOpen" [class.on]="moreOpen" title="More" aria-label="More actions">
     <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
   </button>
@@ -68,6 +69,13 @@
 </div>
 
 <div class="stage">
+  <!-- THE LAYOUT COULD NOT BE READ (review §2.4): the stand-in drawn underneath (a lone collector, a default board) looked
+       like the shop had been wiped. Covered, with what happened and the one useful thing to do. Saving stays off. -->
+  <div class="load-failed" *ngIf="loadFailed">
+    <p class="lf-title">Couldn't load your layout — {{ loadFailed }}.</p>
+    <p class="lf-sub">Your shop is safe on the brain; nothing here will be saved. It may be restarting.</p>
+    <button type="button" class="primary" (click)="reload()">Try again</button>
+  </div>
   <!-- Every interactive handle stops propagation in its own pointerdown, so a
        pointerdown that reaches this element is BY DEFINITION on empty board —
        which makes it the pan gesture, with no hit-testing of our own. -->

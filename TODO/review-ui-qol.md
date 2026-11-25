@@ -130,10 +130,7 @@ and its Save is live.
 **Fix:** On failure say "Can't reach the brain"; disable that Save with the reason beside it.
 
 ### 2.4 [M] A canvas that could not load still draws a starter shop
-**Where:** `build/build.component.ts:5259` and the seed at `:5858`.
-**What:** "Couldn't load your layout" sits above a drawn collector, a "Shop Brain" board and a tray saying "nothing
-answered". Saving is off (D-84), but the drawing looks like your shop was wiped.
-**Fix:** Draw nothing but the message and Try again while `loadFailed` is set.
+**FIXED 2026-11-23** — A canvas that could not load shows only that, and Try again
 
 ### 2.5 [M] Live said "No shop configured yet" over a saved layout
 **Where:** `live/live.component.ts:580-586` (the `noShop` template keys on `tools.length`).
@@ -220,11 +217,7 @@ servo "Set its positions"; Settings "Reset gate calibration — Start over" / "R
 **FIXED 2026-11-23** — A canvas sheet that holds edits closes only by its own ✕ or Save
 
 ### 4.2 [M] Done leaves without saving
-**Where:** `build.component.html:24` (`routerLink="/shop"`), guard `canLeave()` at `build.component.ts:5463`.
-**What:** "Done" with unsaved changes gives a browser dialog with OK/Cancel to *lose* them; there is no "Save and
-leave". Most people expect Done to keep what they did.
-**Fix:** Done saves and then leaves (once saves never block, this is safe); the leave prompt offers Save / Discard /
-Keep editing.
+**FIXED 2026-11-23** — Done saves, then leaves
 
 ### 4.3 [M] Paired boards don't appear on the canvas until a layout is saved
 **Where:** `board-setup.component.ts:528` `syncLayoutControllers()` is a no-op with no saved layout.

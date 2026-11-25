@@ -33,6 +33,12 @@
 /* position: relative so the zoom control can anchor to the stage rather than to
    the canvas's scrolled content — see the note on .zoomer in the template. */
 .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+.load-failed { position: absolute; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column;
+               align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; }
+.load-failed .lf-title { font-size: 15px; font-weight: 600; margin: 0; }
+.load-failed .lf-sub { font-size: 13px; color: var(--muted); margin: 0 0 6px; max-width: 320px; }
+.load-failed button { background: var(--accent); color: #1a1200; border: 0; border-radius: 10px; padding: 10px 22px;
+                      font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
 /* overflow stays auto — it is what makes the element scrollable at all, which the
    pan gesture, the zoom anchoring and the wheel all drive through scrollLeft/Top.
    Only the BARS are hidden: they framed the drawing in permanent grey furniture,

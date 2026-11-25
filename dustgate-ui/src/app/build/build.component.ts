@@ -5566,6 +5566,20 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /** Leaving with changes that are not saved asks first (the route guard and the browser's own "Leave site?"). */
+  /** Try again after a failed load: a fresh read of everything, as opening the page does. */
+  reload(): void { window.location.reload(); }
+
+  /** Done: save what changed, then leave. Most people expect Done to keep their work, and the old Done was a link that
+   *  asked the browser's "leave without saving?" — a dialog whose OK threw the edits away (review §4.2). A save the
+   *  brain did not take stays on the canvas with its reason, edits intact. Saves are not refused for content (D-88). */
+  async done(): Promise<void> {
+    if (this.dirty && !this.loadFailed) {
+      await this.save();
+      if (this.dirty) return;   // not saved: the guide bar says why
+    }
+    void this.nav.navigate(['/shop']);
+  }
+
   canLeave(): boolean {
     return !this.dirty || this.loadFailed !== '' ||
       window.confirm('Leave without saving?\n\nYour changes to the layout haven’t reached the shop brain. If you leave, they’re gone.');
