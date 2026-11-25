@@ -32,7 +32,8 @@ console.log('\nL2 why a request failed');
 {
   ok('no answer', whyFailed({ status: 0 }) === "the shop brain didn't answer");
   ok('the device says why', whyFailed({ status: 409, error: { error: 'unknown selector' } }) === 'unknown selector');
-  ok('a bare refusal still says something', whyFailed({ status: 500, error: null }).includes('HTTP 500'));
+  ok('a bare 500 is no answer, with no code in the words', /didn't answer/.test(whyFailed({ status: 500, error: null })) && !/HTTP/.test(whyFailed({ status: 500, error: null })));
+  ok('a bare refusal still says something', /turned it down/.test(whyFailed({ status: 409, error: null })));
   ok('a string body', whyFailed({ status: 400, error: 'bad tool' }) === 'bad tool');
   ok('never empty', whyFailed(null).length > 0);
 }

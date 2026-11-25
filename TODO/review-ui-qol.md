@@ -35,13 +35,7 @@ Zones:
 **FIXED 2026-11-23** — A refused layout reads in the guide bar's words, not the validator's
 
 ### 1.2 [H] "HTTP 500" and "refused" in every screen's failure line
-**Where:** `services/failure.ts:55` and `:64` (`refused it (HTTP ${status})`); seen on Tools, Gates, Plugs and the canvas
-with the brain stopped.
-**What:** With the brain down the dev proxy answers 500, and every screen said "the shop brain refused it (HTTP 500)":
-a code, and the wrong story. Nothing refused anything; nothing answered. The same text appears in production for any
-5xx without a body.
-**Fix:** Drop the status code from the sentence (console only), and treat a 5xx with no body, a 502/503/504 and a proxy
-error as "didn't answer", per D-84.
+**FIXED 2026-11-23** — A brain that didn't answer says so, with no status code in the words
 
 ### 1.3 [H] Plugs are named by hostname and MAC, and their addresses are on screen
 **Where:** canvas tray chips (`build/build.component.html:479`, `o.name || o.hostname`); the plug picker

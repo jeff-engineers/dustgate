@@ -26,7 +26,7 @@ interface FailureShape { status?: number; error?: unknown; message?: string; url
 export function noAnswer(e: unknown): boolean {
   if (!e || typeof e !== 'object') return true;
   const f = e as FailureShape;
-  if (typeof f.status === 'number') return f.status === 0;
+  if (typeof f.status === 'number') return f.status === 0 || unanswered(f);
   return !(e instanceof Error && f.message);
 }
 
@@ -43,18 +43,25 @@ function answerText(body: unknown): string {
   return '';
 }
 
+/** A server error that carries no reason of its own is a brain that did not answer, not one that refused: the dev
+ *  proxy answers 500 when the brain is down, and a gateway 502/503/504 means the same (review §1.2, D-84). */
+function unanswered(f: FailureShape): boolean {
+  if (typeof f.status !== 'number' || f.status < 500) return false;
+  return f.status === 502 || f.status === 503 || f.status === 504 || !answerText(f.error);
+}
+
 /**
  * Why it failed, in a few words that fit after a dash: "the shop brain didn't answer", or the brain's own reason, or
- * "the shop brain refused it (HTTP 409)" when it gave none. `who` names what was asked — a plug, rather than the brain,
+ * "the shop brain turned it down" when it refused with no reason (the status code goes to the console only). `who` names what was asked — a plug, rather than the brain,
  * for the plug screens. Never empty.
  */
 export function failureReason(e: unknown, who = 'the shop brain'): string {
   if (!e || typeof e !== 'object') return 'something went wrong';
   const f = e as FailureShape;
   if (typeof f.status !== 'number') return e instanceof Error && f.message ? f.message : `${who} didn't answer`;
-  if (f.status === 0) return `${who} didn't answer`;
-  const said = answerText(f.error);
-  return said || `${who} refused it (HTTP ${f.status})`;
+  if (f.status === 0 || unanswered(f)) return `${who} didn't answer`;
+  // No status code in what a person reads: it goes to the console (reportFailure), where it helps.
+  return answerText(f.error) || `${who} turned it down`;
 }
 
 /** The short label for the console line: what happened to the request. */
@@ -63,7 +70,7 @@ function kindOf(e: unknown): string {
   const f = e as FailureShape;
   if (typeof f.status !== 'number') return e instanceof Error ? 'failed here' : 'no answer';
   if (f.status === 0) return 'no answer';
-  return `refused (HTTP ${f.status})`;
+  return unanswered(f) ? `no answer (HTTP ${f.status})` : `refused (HTTP ${f.status})`;
 }
 
 /**

@@ -5521,7 +5521,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** A save the brain refused or never answered: which of the two, in its own words, and where the changes are. */
   private setSaveFailure(context: string, e: unknown): void {
     const shown = noAnswer(e) ? 'Not saved — the shop brain didn’t answer.'
-                              : `Not saved — the shop brain refused it: ${failureReason(e)}.`;
+                              : `Not saved — ${failureReason(e)}.`;   // the brain's own reason, or "the shop brain turned it down"
     this.saveError = reportFailure(context, e, shown);
     this.saveSub = noAnswer(e) ? 'It may be restarting. Your changes are kept on this screen; Save again in a moment.'
                                : 'Your changes are kept on this screen.';
