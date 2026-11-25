@@ -257,10 +257,7 @@ Save for the layout.
 ## 5. Phone use
 
 ### 5.1 [H] The canvas page scrolls sideways at 375 px
-**Where:** the Tasmota sweep row (`build.component.html:545-549`): its button does not wrap or shrink.
-**What:** `app-build` is 388 px wide in a 373 px host, so the whole page slides 15 px: the title, the tray's "Devices"
-and the menu button are clipped at the left edge as soon as anything scrolls.
-**Fix:** Let `.sweep` wrap (or the label shrink to "Look for more"), and give `app-build` `overflow-x: clip`.
+**FIXED 2026-11-23** — The canvas no longer slides sideways at phone width
 
 ### 5.2 [H] The canvas tool sheet's yes/no overflows at phone width
 **Where:** `tools/element-outlet-config.component.ts` `.q` / `.yesno` styles.
@@ -294,3 +291,9 @@ menu.
 **What:** The Miter Saw's plug is named "shellyplugus-bandsaw"; boards are named after gates ("Planer gate", "Table
 saw gate") so the Gates list reads "Ball valve · Planer gate · channel 1".
 **Fix:** Name demo plugs after their tools and boards after where they hang ("Planer wall", "Back wall").
+
+### 6.3 [L] The demo banner covers a canvas sheet's ✕ at phone width
+**Where:** the demo-mode banner over the canvas sheets (seen 2026-11-25, 375 px).
+**What:** A sheet's ✕ sits at the top of the screen, under the banner, so a tap on it lands on the banner and the sheet
+stays open. Demo only (the banner is not on a real brain), but the demo is the public face.
+**Fix:** Start the sheets below the banner (a top offset while demo mode is on), or move the banner to the bottom.
