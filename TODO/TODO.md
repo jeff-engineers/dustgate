@@ -44,10 +44,6 @@ are in `TODO/audit-2026-11-23.md`. The big cuts there (ESP32 brain, RF, PWM) are
   "Reads missed" in developer mode).
 - **PWM servos are much less repeatable than the serial ones** (no surprise). Worth a number when the harness or the
   bench can measure it; it is another point for "every gate on a serial servo" (audit §2).
-- **The canvas menu's "Find boards" should just say "Boards".**
-- **The canvas menu should reach the Gates page too**, beside Boards.
-- **Unplugging a gate by dropping its cable on nothing is too easy to do by accident.** Ask first, and/or make it a
-  right-click / long-press action on the cable or the tab rather than a plain drag.
 - **Gate (and servo) names must tell gates apart.** Four rows reading "Ball valve" is confusing: auto-name a gate from
   what it feeds ("Planer valve"), or make it obvious a name is needed and must be unique.
 - **A servo and its gate are one thing to a woodworker** (physically tied, so they should read as electrically tied).

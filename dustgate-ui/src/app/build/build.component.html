@@ -32,11 +32,13 @@
     <!-- A shop grows a second collector roughly once, which is what puts it here
          rather than on the toolbar. -->
     <button (click)="moreOpen = false; addSystem()" [disabled]="!hasShop">Add system</button>
-    <button (click)="moreOpen = false; goBoards()">Find boards</button>
+    <!-- The shop's other pages, named as the pages are (Jeff, 2026-11-25: "Find boards" was a page called Boards). -->
+    <button (click)="moreOpen = false; goBoards()">Boards</button>
+    <button (click)="moreOpen = false; goGates()">Gates</button>
     <!-- The twin of Boards: a page of plugs, with the scan and the sweep on it. Replaces "Find plugs", which only
          refreshed the tray and read as a page that failed to open. -->
     <button (click)="moreOpen = false; goPlugs()">Plugs</button>
-    <!-- Same reasoning as Find boards: an errand you run rarely. The canvas is
+    <!-- Same reasoning as Boards: an errand you run rarely. The canvas is
          where you actually spend time, so it needs a way in that doesn't route
          through the Live view. -->
     <!-- The blunt version of deleting a system: back to the first collector alone. Last, set apart, and a confirm
@@ -608,6 +610,20 @@
   </div>
 </div>
 
+
+<!-- Unplug a gate: asked when a cable is let go over nothing (also on the gate's own menu, which does not ask). -->
+<div class="sheet-bg" *ngIf="unplugAsk" (pointerdown)="unplugAsk = null"></div>
+<div class="sheet narrow" *ngIf="unplugAsk as ua">
+  <div class="card removal" role="dialog" aria-labelledby="unplug-title">
+    <div class="head"><span class="kind" id="unplug-title">Unplug the {{ ua.gate }} from {{ ua.board }}?</span></div>
+    <p class="q-sub">It stays on the layout, not wired to a board, and doesn't move until you plug it in again. Undo puts it
+      back.</p>
+    <div class="actions">
+      <button type="button" (click)="unplugAsk = null">Keep it plugged in</button>
+      <button type="button" class="primary" (click)="confirmUnplug()">Unplug</button>
+    </div>
+  </div>
+</div>
 
 <!-- Delete a system / Clear shop: one sheet, saying what goes and what stays before anything happens. -->
 <div class="sheet-bg" *ngIf="removalAsk" (pointerdown)="removalAsk = null"></div>

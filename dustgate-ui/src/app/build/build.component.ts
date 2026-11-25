@@ -297,7 +297,7 @@ const CABLE_SHADES = ['#38b6f0', '#45cfd8', '#6f9df2', '#2f9fd0'];
 type Fitting = SelKind | 'tool' | 'duct';
 type MenuKind = Fitting | 'cap' | 'uncap' | 'delete' | 'board' | 'travel' | 'outlet' | 'secondaryPort'
               | 'addSystem' | 'findBoards' | 'rename' | 'moveSystem' | 'system' | 'boardSetup'
-              | 'unpairBoard' | 'deleteSystem' | 'addServo' | 'replaceBoard' | 'replaceWith';
+              | 'unpairBoard' | 'deleteSystem' | 'addServo' | 'replaceBoard' | 'replaceWith' | 'unplug';
 
 const FITTINGS: Array<{ kind: Fitting; label: string }> = [
   { kind: 'duct',          label: 'Duct' },          // lay bare pipe; populate the open end later
@@ -2739,7 +2739,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private canvasOptions(): MenuOption[] {
     return [
       { kind: 'addSystem', label: 'Add system', enabled: !!this.hasShop, note: 'a second collector' },
-      { kind: 'findBoards', label: 'Find boards…', enabled: true, note: 'pair another brain' },
+      { kind: 'findBoards', label: 'Boards', enabled: true, note: 'pair or set up a board' },
     ];
   }
 
@@ -2912,6 +2912,9 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
           { kind: 'travel', label: 'Adjust travel limits', enabled: true,
             note: n.setup === 'todo' ? 'not done yet' : undefined }]
       : [];
+    // Unplugging is a deliberate act from the gate's own menu (right-click, long-press), not only a cable dropped on
+    // nothing — that drop now asks first (Jeff, 2026-11-25: too easy to do by accident).
+    if (this.boardOf(n.id)) opts.push({ kind: 'unplug', label: 'Unplug from its board', enabled: true, note: 'it stays on the layout' });
     return opts.concat(this.gateTypes(n).map(t => ({
       kind: t.kind, label: t.current ? `${t.label} (current)` : t.label,
       enabled: t.enabled, note: t.note,
@@ -2990,6 +2993,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
       else if (kind === 'outlet') this.configureOutlet(id);
       else if (kind === 'rename') this.startRename(id);
       else if (kind === 'delete') { this.selectedId = id; this.deleteSelected(); }
+      else if (kind === 'unplug') this.unplug(id, false);
       else if (kind === 'deleteSystem') this.askDeleteSystem(id);
       else this.convertKind(id, kind as SelKind);
       return;
@@ -3965,6 +3969,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   }
   private boardDragPt: Pt | null = null;
   goBoards(): void { void this.nav.navigate(['/boards']); }
+  goGates(): void { void this.nav.navigate(['/gates']); }
   goPlugs(): void { void this.nav.navigate(['/plugs']); }
   goSettings(): void { void this.nav.navigate(['/settings']); }
   /** The one funnel every part of a board goes through — its glyph, its ports, the
@@ -4613,14 +4618,11 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     // DROPPED ON NOTHING: the cable is pulled out. From a gate's tab, that gate; from a board's port, the gate on it. The
     // gate stays in the shop, NOT WIRED, until it is plugged in somewhere (shop-edit.js unwireGate) — the way out when a
     // board changed under it, without deleting the gate or inventing a socket.
-    if (d.mode === 'toPort' && !d.over && d.gateId && this.boardOf(d.gateId)) {
-      this.pushHistory(null);
-      this.unplug(d.gateId);
-      return;
-    }
+    // It ASKS (unplugAsk): a cable let go a little off its port is easy to do by accident (Jeff, 2026-11-25).
+    if (d.mode === 'toPort' && !d.over && d.gateId && this.boardOf(d.gateId)) { this.askUnplug(d.gateId); return; }
     if (d.mode === 'toGate' && !d.overGate && !d.over) {
       const pulled = this.rosterFor(d.port!.boardId).get(d.port!.channel);
-      if (pulled) { this.pushHistory(null); this.unplug(pulled); }
+      if (pulled) this.askUnplug(pulled);
       return;
     }
     const gateId = d.mode === 'toPort' ? d.gateId! : d.overGate;
@@ -4710,8 +4712,19 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     this.dirty = true; this.saveError = ''; this.saveNote = ''; this.saveWarn = '';
     this.syncNodes();
   }
-  /** Pull a gate's cable out: the gate stays, NOT WIRED (shop-edit.js unwireGate). */
-  private unplug(gateId: string): void {
+  /** "Unplug the Miter Saw Valve from Serial 1?" — the question a cable dropped on nothing asks. */
+  unplugAsk: { gateId: string; gate: string; board: string } | null = null;
+  private askUnplug(gateId: string): void {
+    this.unplugAsk = { gateId, gate: (this.elem(gateId)?.['name'] as string) || 'this gate', board: this.boardName(this.boardOf(gateId)) || 'its board' };
+  }
+  confirmUnplug(): void {
+    const a = this.unplugAsk; this.unplugAsk = null;
+    if (a) this.unplug(a.gateId);
+  }
+
+  /** Pull a gate's cable out: the gate stays, NOT WIRED (shop-edit.js unwireGate). Undo puts it back. */
+  private unplug(gateId: string, record = true): void {
+    if (record) this.pushHistory(null);   // the menu has already left its undo point
     unwireGate(this.topo as never, gateId);
     this.dirty = true; this.saveError = ''; this.saveNote = ''; this.saveWarn = '';
     this.syncNodes();
