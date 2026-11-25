@@ -88,6 +88,15 @@ int main(int argc, char** argv) {
     ok("servo angle: gate1 closed = 100", topo::servoCommandAngle(g1, "closed") == 100, std::to_string(topo::servoCommandAngle(g1, "closed")));
   }
 
+  // PAIR: shared/device-model/topology.test.js "a serial servo with no range". Same cases, same numbers.
+  {
+    StaticJsonDocument<512> b, p;
+    deserializeJson(b, R"({"kind":"servoGate","states":[{"id":"open","offsetDeg":0},{"id":"closed","offsetDeg":90}],"servo":{"bus":3,"referenceAngle":250}})");
+    deserializeJson(p, R"({"kind":"servoGate","states":[{"id":"open","offsetDeg":0},{"id":"closed","offsetDeg":90}],"servo":{"channel":0,"referenceAngle":250}})");
+    ok("a serial servo with no range reaches 340", topo::servoCommandAngle(b.as<JsonObjectConst>(), "closed") == 340);
+    ok("a PWM servo with no range stops at 180", topo::servoCommandAngle(p.as<JsonObjectConst>(), "closed") == 180);
+  }
+
   // ── a CAPPED branch is a dead end, not a route ────────────────────────────
   //
   // PAIR: shared/device-model/topology.test.js "blocked branch". Same fixture

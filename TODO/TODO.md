@@ -36,6 +36,24 @@ are in `TODO/audit-2026-11-23.md`. The big cuts there (ESP32 brain, RF, PWM) are
    Next: the canvas's own gate binding (`writeBinding`, the servo-number travel) and its deletes onto these operations,
    then the other screens (Boards, gate setup, tool setup) — `scenarios/_edit.js` still writes two edits by hand.
 
+## Jeff's shop notes (2026-11-25)
+
+- **PWM struggles on 4 ft of servo extension; serial ran 16 ft without visible change** (README, 2026-11-25). With
+  the repeatability note below, the case for dropping PWM (audit §2). **Bench test for Jeff:** missed reads over a few dozen
+  Test moves at 16 ft against 4 ft, the board restarted between to zero its counters (Boards → the servo's page shows
+  "Reads missed" in developer mode).
+- **PWM servos are much less repeatable than the serial ones** (no surprise). Worth a number when the harness or the
+  bench can measure it; it is another point for "every gate on a serial servo" (audit §2).
+- **The canvas menu's "Find boards" should just say "Boards".**
+- **The canvas menu should reach the Gates page too**, beside Boards.
+- **Unplugging a gate by dropping its cable on nothing is too easy to do by accident.** Ask first, and/or make it a
+  right-click / long-press action on the cable or the tab rather than a plain drag.
+- **Gate (and servo) names must tell gates apart.** Four rows reading "Ball valve" is confusing: auto-name a gate from
+  what it feeds ("Planer valve"), or make it obvious a name is needed and must be unique.
+- **A servo and its gate are one thing to a woodworker** (physically tied, so they should read as electrically tied).
+  Move or add the servo actions (Find it, Test move, Find its servo, Replace) onto the gate, and re-think whether the
+  Boards page should list servos at all.
+
 ## Pi bring-up (started 2026-10-06; the Pi runs the shop since 2026-10-11)
 
 Goal for now: **run the shop without the Mac**, with no fixed address anywhere. **Steps 1-4 done 2026-10-06** (Pi Zero 2 W, Trixie, `dustgate.local`): the brain runs on the Pi with the shop's layout and plugs, and all six nodes found it by beacon with nobody touching them. Steps 5-7 need someone in the shop. Steps, in order; each says

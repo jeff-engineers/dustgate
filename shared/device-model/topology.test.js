@@ -575,6 +575,13 @@ const idxOf = (plan, sel) => plan.moves.findIndex((m) => m.selectorId === sel);
   // Clamp: referenceAngle + offset beyond maxAngle is clamped.
   const clamped = { kind: 'servoGate', states: [{ id: 'x', offsetDeg: 200 }], servo: { referenceAngle: 0, maxAngle: 180 } };
   eq('servo resolver: clamps to maxAngle', servoCommandAngle(clamped, 'x'), 180);
+
+  // PAIR: test_topology_router.cpp "a serial servo with no range". With no maxAngle, a bus servo turns a whole circle and
+  // a PWM servo stops at 180 (defaultMaxAngle, 2026-11-25).
+  const busOpen = { kind: 'servoGate', states: [{ id: 'open', offsetDeg: 0 }, { id: 'closed', offsetDeg: 90 }], servo: { bus: 3, referenceAngle: 250 } };
+  eq('a serial servo with no range reaches 340', servoCommandAngle(busOpen, 'closed'), 340);
+  const pwmOpen = { kind: 'servoGate', states: [{ id: 'open', offsetDeg: 0 }, { id: 'closed', offsetDeg: 90 }], servo: { channel: 0, referenceAngle: 250 } };
+  eq('a PWM servo with no range stops at 180', servoCommandAngle(pwmOpen, 'closed'), 180);
 }
 
 // ── airflow integrity: always-open (ungated) tools are leaks ────────────────

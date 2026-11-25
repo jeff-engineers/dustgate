@@ -41,6 +41,14 @@ Update it in the same session as the bench that proves something.
   unplugged mid-move, Replace a servo, two servos on one chain, and the bench console's fixed `setid`. Seen once and not
   since: the board stopped acknowledging the brain for ~40 s just after a servo was numbered (now logged as `[LOOP] slow
   pass` if it recurs).
+- **Two serial servos on one bus board, through the Pi brain** (2026-11-25, dustgate-serial-1: the Manifold plugged
+  straight in, the Miter Saw Valve on servo extension cable): **Find its servo** tied the valve's untied servo to it.
+  Extension on the valve at 4, 8, 12 and 16 ft with no visible change: 11.9 V at the
+  servo against 12.0 V plugged straight in, the same 20-25% peak loads, and 7 missed reads in 1,105 against none in
+  2,155 — the first sign of margin, not a fault (which length they happened at is not known). PWM on 4 ft was already
+  worse (Jeff). Also seen the same day: serial servos turn the same way as PWM ones after the board's direction flip
+  (updated over WiFi from the app), a serial valve reaches its full turn, and positions set on the Gates page stay
+  saved. Not run yet: a tool routing either gate.
 - **The ball valve's load on an ST3215** (the bus bench console, `xiao_c5_bus_bench`, 12 V): the prototype valve needs
   about 0.7 kg·cm (15.6% peak coupled vs 13.2% uncoupled, 2026-11-01); the new design reads about 20% peak, gross,
   2026-11-12. Not yet measured: a valve on a duct with the collector pulling.

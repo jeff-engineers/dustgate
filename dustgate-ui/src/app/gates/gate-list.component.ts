@@ -10,6 +10,7 @@ import {
   isCalibrated, isConfigurableSelector, isServoKind, kindLabel, swingSequence,
 } from './selector-types';
 import { type ShopDoc, systemLabel, systemsInLayoutOrder, toShop } from '../services/shop-doc';
+import { replaceElement } from '@shop-edit';
 
 // ── The gates screen ─────────────────────────────────────────────────────────
 // Every configured gate in one list, each tappable into the calibration it
@@ -327,9 +328,9 @@ export class GateListComponent implements OnInit {
   /** Fold the calibrated gate back into the doc and persist it, as the canvas does. */
   async onConfigured(updated: ConfigurableSelector): Promise<void> {
     if (!this.topo) return;
-    const els = elementsOf(this.topo);
-    const i = els.findIndex((e) => e['id'] === updated.id);
-    if (i >= 0) els[i] = updated as unknown as (typeof els)[number];
+    // Into the gate's own system, not into the fresh array elementsOf() builds: that edit was thrown away, and the
+    // layout saved below was the old one (shop-edit.js replaceElement).
+    replaceElement(this.topo, updated);
     this.editing = null;
     try { await this.api.putTopology(this.topo); }
     // A gate's setup lives in the layout, so a failed write is a setup that did not save — said plainly, rather than

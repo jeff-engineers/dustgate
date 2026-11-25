@@ -57,8 +57,12 @@ static busbank::Ended runUntilEnd(busbank::Bank& b, uint32_t& now, uint32_t limi
 int main() {
   using namespace busbank;
   printf("BB1 angles and counts\n");
-  ok("90° is a quarter turn", degToCounts(90) == 1024);
-  ok("359° stays inside one turn", degToCounts(359) == 4085 && degToCounts(400) == 4095);
+  // Mirrored (2026-11-25): the servo counts the other way to a PWM servo, so a bigger angle is FEWER counts.
+  ok("0° is count 0", degToCounts(0) == 0);
+  ok("90° is a quarter turn, the PWM servo's way round", degToCounts(90) == 3072);
+  ok("359° stays inside one turn", degToCounts(359) == 11 && degToCounts(400) == 1);
+  ok("a reading comes back as the angle that was asked", (int)(countsToDeg(degToCounts(90)) + 0.5f) == 90
+       && (int)(countsToDeg(degToCounts(270)) + 0.5f) == 270 && countsToDeg(0) == 0.0f);
 
   printf("BB2 a move runs to arrival, in position mode, and keeps its peak\n");
   {
