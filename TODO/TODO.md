@@ -54,6 +54,21 @@ are in `TODO/audit-2026-11-23.md`. The big cuts there (ESP32 brain, RF, PWM) are
   Move or add the servo actions (Find it, Test move, Find its servo, Replace) onto the gate, and re-think whether the
   Boards page should list servos at all.
 
+## Direction (Jeff, 2026-11-25) — not started
+
+- **Consistent navigation on every page**: one header, one back, one way to reach Layout, Live, Gates, Boards and
+  Settings (fold in the UI review's §3.3).
+- **PWM servos are going** (99% decided), but **not until Jeff has enough serial servos to convert the whole shop**:
+  until then PWM keeps working and gets fixes, just nothing new. Why serial: repeatable where PWM drifts, 16 ft of
+  extension where PWM struggled at 4 ft, quieter (it sounds like a better-made thing), and it TELLS us — "the board
+  refused the move" while rewiring is information a PWM servo can never give. Then **pare the custom PCB down hard**,
+  and make a board OPTIONAL for gates and systems with no bin beam or CT clamp — the Seeed bus board alone drives gates.
+- **Asking for suction at a tool by hand, without buttons**, now that one brain drives many gates: a touchscreen (or
+  several) near the tools, listing the tools with an on/off for each. Options and their trade-offs are in the session
+  notes of 2026-11-25; the leading idea is a self-contained ESP32 touchscreen as its own WiFi panel (no wiring to any
+  gate board), using the brain's manual-tool route that the Live page uses. The existing status screen (SSD1306 OLED,
+  I2C at 0x3C on D4/D5) stays for a board's own status.
+
 ## Pi bring-up (started 2026-10-06; the Pi runs the shop since 2026-10-11)
 
 Goal for now: **run the shop without the Mac**, with no fixed address anywhere. **Steps 1-4 done 2026-10-06** (Pi Zero 2 W, Trixie, `dustgate.local`): the brain runs on the Pi with the shop's layout and plugs, and all six nodes found it by beacon with nobody touching them. Steps 5-7 need someone in the shop. Steps, in order; each says
