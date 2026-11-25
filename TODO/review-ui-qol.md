@@ -133,12 +133,7 @@ and its Save is live.
 **FIXED 2026-11-23** — A canvas that could not load shows only that, and Try again
 
 ### 2.5 [M] Live said "No shop configured yet" over a saved layout
-**Where:** `live/live.component.ts:580-586` (the `noShop` template keys on `tools.length`).
-**What:** Seen once against the mock right after a layout was saved: "No shop configured yet — Set up your shop →".
-It cleared on reload. A shop whose tools have not loaded YET reads as a shop that does not exist, and the button
-offers to start over.
-**Fix:** A distinct loading state ("Reading your shop…") until the first `getTopology()` answers; "No shop configured
-yet" only on a 404.
+**FIXED 2026-11-23** — Live reads before it says there is no shop
 
 ### 2.6 [L] Every problem on Live links to the brain log first
 **Where:** `live/live.component.ts` problems block (`routerLink="/boards/log"` on every row).
