@@ -35,13 +35,7 @@ Zones:
 **FIXED 2026-11-23** — A refused layout reads in the guide bar's words, not the validator's
 
 ### 1.2 [H] "HTTP 500" and "refused" in every screen's failure line
-**Where:** `services/failure.ts:55` and `:64` (`refused it (HTTP ${status})`); seen on Tools, Gates, Plugs and the canvas
-with the brain stopped.
-**What:** With the brain down the dev proxy answers 500, and every screen said "the shop brain refused it (HTTP 500)":
-a code, and the wrong story. Nothing refused anything; nothing answered. The same text appears in production for any
-5xx without a body.
-**Fix:** Drop the status code from the sentence (console only), and treat a 5xx with no body, a 502/503/504 and a proxy
-error as "didn't answer", per D-84.
+**FIXED 2026-11-23** — A brain that didn't answer says so, with no status code in the words
 
 ### 1.3 [H] Plugs are named by hostname and MAC, and their addresses are on screen
 **Where:** canvas tray chips (`build/build.component.html:479`, `o.name || o.hostname`); the plug picker
@@ -75,6 +69,8 @@ so "This board" is wrong there.
 board name with "runs the app" as its subtitle.
 
 ### 1.6 [M] "Device" for the sensing setup on a tool
+**FIXED 2026-11-25** — the tool menu ("How it is sensed" / "Plug or clamp"), the sheet header, the jog error, the build
+stamp, and the tray ("Outlets & CT clamps", Jeff, D-72 updated).
 **Where:** canvas tool menu `Set up this device` / `Device` (`build/build.component.ts:2833`); the sheet header
 `Tool: New tool — Device setup` (`tools/element-outlet-config.component.ts:76`); the tray title `Devices`
 (`build.component.html:470`); `servo-calibration.component.ts:450` "This device doesn't have the servo jog endpoint
@@ -122,39 +118,19 @@ this is a phone app.
 ## 2. Failures, empty and offline states
 
 ### 2.1 [H] A failed load shows the empty state as well as the error
-**Where:** Tools (`tools/tool-setup.component.ts:297` — `!anythingToSetUp` with no error check); Gates
-(`gates/gate-list.component.ts:158`); Plugs (`plugs/plugs.component.ts:140`).
-**What:** With the brain stopped: "No tools to set up yet. Draw your plumbing first." above "Couldn't load your
-tools…"; same on Gates and Plugs ("No plugs are paired to a tool yet"). D-84: a list that failed to load is not an
-empty list — and "draw your plumbing first" sends someone to redraw a shop that exists.
-**Fix:** Gate each empty state on "loaded and no error", and say "Can't reach the brain — showing nothing until it
-answers. Trying again…" instead.
+**FIXED 2026-11-23** — A list that failed to load says so, and no longer claims to be empty
 
 ### 2.2 [H] Boards says nothing when the brain is down
-**Where:** `boards/board-setup.component.ts` — `refreshLinks()` failures go to `QuietPoll` only (`:858-866`).
-**What:** With the brain stopped, Boards still showed "This board" with its green dot and no message. The screen a
-person opens to ask "is it connected?" says yes.
-**Fix:** After two failed polls, grey every dot and show the same "Can't reach the brain" bar Live has.
+**FIXED 2026-11-23** — Boards stops vouching for its boards when the brain stops answering
 
 ### 2.3 [M] Settings waits forever for a brain that is not there
-**Where:** `settings/settings.component.ts:400` ("Reading the shop's setting…"), `:373`.
-**What:** With the brain stopped the fail-closed field sits empty under "Reading the shop's setting…" indefinitely,
-and its Save is live.
-**Fix:** On failure say "Can't reach the brain"; disable that Save with the reason beside it.
+**FIXED 2026-11-23** — Settings says why it cannot read the shop's settings
 
 ### 2.4 [M] A canvas that could not load still draws a starter shop
-**Where:** `build/build.component.ts:5259` and the seed at `:5858`.
-**What:** "Couldn't load your layout" sits above a drawn collector, a "Shop Brain" board and a tray saying "nothing
-answered". Saving is off (D-84), but the drawing looks like your shop was wiped.
-**Fix:** Draw nothing but the message and Try again while `loadFailed` is set.
+**FIXED 2026-11-23** — A canvas that could not load shows only that, and Try again
 
 ### 2.5 [M] Live said "No shop configured yet" over a saved layout
-**Where:** `live/live.component.ts:580-586` (the `noShop` template keys on `tools.length`).
-**What:** Seen once against the mock right after a layout was saved: "No shop configured yet — Set up your shop →".
-It cleared on reload. A shop whose tools have not loaded YET reads as a shop that does not exist, and the button
-offers to start over.
-**Fix:** A distinct loading state ("Reading your shop…") until the first `getTopology()` answers; "No shop configured
-yet" only on a 404.
+**FIXED 2026-11-23** — Live reads before it says there is no shop
 
 ### 2.6 [L] Every problem on Live links to the brain log first
 **Where:** `live/live.component.ts` problems block (`routerLink="/boards/log"` on every row).
@@ -196,11 +172,7 @@ Layout and the log only.
 or six destinations from Live, the canvas menu and Settings, Plugs included.
 
 ### 3.4 [M] Gates are listed by kind, so four rows read "Ball valve"
-**Where:** Gates list (`gates/gate-list.component.ts:128-129`, `name: sel.name || sel.id`, sub `kind · where`).
-**What:** In the demo every row's title is "Ball valve" and its subtitle starts "Ball valve · …". To recalibrate the
-table saw's gate you read the board name in the small print. Add a servo shows `g.name || g.id` too.
-**Fix:** Title a gate by the tools it serves ("Table Saw", "Router Table & Jointer") when its name is empty or equals
-its kind; the kind goes in the subtitle once.
+**FIXED 2026-11-23** — A gate is called by the tools it feeds until someone names it
 
 ### 3.5 [M] Removing a plug from a tool is three verbs
 **Where:** Tools/canvas sheet "Remove outlet" / "Remove" (`tools/paired-outlet-row.component.ts:116`, `:155`); Plugs
@@ -234,18 +206,10 @@ servo "Set its positions"; Settings "Reset gate calibration — Start over" / "R
 ## 4. Dead ends and stranded edits
 
 ### 4.1 [H] Tapping outside a sheet throws away what you entered
-**Where:** every canvas sheet backdrop — `build.component.html:572`, `:585`, `:611`, `:638`, and the outlet/collector
-sheet (`(pointerdown)="… = null"`).
-**What:** Pick a plug, set the threshold, then brush the dimmed canvas above the sheet: the sheet closes, nothing
-saved, no question. On a phone the backdrop is most of the screen.
-**Fix:** Backdrop closes only an untouched sheet; a touched one asks (with the 3.2 sheet) or ignores the tap.
+**FIXED 2026-11-23** — A canvas sheet that holds edits closes only by its own ✕ or Save
 
 ### 4.2 [M] Done leaves without saving
-**Where:** `build.component.html:24` (`routerLink="/shop"`), guard `canLeave()` at `build.component.ts:5463`.
-**What:** "Done" with unsaved changes gives a browser dialog with OK/Cancel to *lose* them; there is no "Save and
-leave". Most people expect Done to keep what they did.
-**Fix:** Done saves and then leaves (once saves never block, this is safe); the leave prompt offers Save / Discard /
-Keep editing.
+**FIXED 2026-11-23** — Done saves, then leaves
 
 ### 4.3 [M] Paired boards don't appear on the canvas until a layout is saved
 **Where:** `board-setup.component.ts:528` `syncLayoutControllers()` is a no-op with no saved layout.
@@ -276,16 +240,10 @@ Save for the layout.
 ## 5. Phone use
 
 ### 5.1 [H] The canvas page scrolls sideways at 375 px
-**Where:** the Tasmota sweep row (`build.component.html:545-549`): its button does not wrap or shrink.
-**What:** `app-build` is 388 px wide in a 373 px host, so the whole page slides 15 px: the title, the tray's "Devices"
-and the menu button are clipped at the left edge as soon as anything scrolls.
-**Fix:** Let `.sweep` wrap (or the label shrink to "Look for more"), and give `app-build` `overflow-x: clip`.
+**FIXED 2026-11-23** — The canvas no longer slides sideways at phone width
 
 ### 5.2 [H] The canvas tool sheet's yes/no overflows at phone width
-**Where:** `tools/element-outlet-config.component.ts` `.q` / `.yesno` styles.
-**What:** At 375 px "Is it on a smart plug?" wraps one word per line and "No, I switch it on myself" runs off the
-sheet's right edge, half hidden.
-**Fix:** Stack the question above the two buttons, and let the buttons wrap.
+**FIXED 2026-11-23** — A tool's yes/no question stacks above its answers on a phone
 
 ### 5.3 [M] The piece badge is a 17 px target at the phone's starting zoom
 **Where:** `build.component.html:283-284` (hit `r=14`, drawn `r=7`, scaled with the canvas).
@@ -313,3 +271,9 @@ menu.
 **What:** The Miter Saw's plug is named "shellyplugus-bandsaw"; boards are named after gates ("Planer gate", "Table
 saw gate") so the Gates list reads "Ball valve · Planer gate · channel 1".
 **Fix:** Name demo plugs after their tools and boards after where they hang ("Planer wall", "Back wall").
+
+### 6.3 [L] The demo banner covers a canvas sheet's ✕ at phone width
+**Where:** the demo-mode banner over the canvas sheets (seen 2026-11-25, 375 px).
+**What:** A sheet's ✕ sits at the top of the screen, under the banner, so a tap on it lands on the banner and the sheet
+stays open. Demo only (the banner is not on a real brain), but the demo is the public face.
+**Fix:** Start the sheets below the banner (a top offset while demo mode is on), or move the banner to the bottom.

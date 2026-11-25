@@ -487,6 +487,40 @@ export function displayName(doc: ShopDoc | null, el: RawEl | null | undefined): 
   return (own || m.name || m.id) as string;
 }
 
+/** The names the canvas gives a new gate (build.component defaultName): a gate still called one of these was never named. */
+const DEFAULT_GATE_NAMES = new Set(['Ball valve', 'Manifold', 'Sliding gate', 'Gate', 'Valve']);
+
+/**
+ * What to call a gate wherever a person reads it: its own name when someone gave it one, otherwise the tools it feeds —
+ * "Table Saw", "Router Table & Jointer". Four rows that all read "Ball valve" told nobody which was which (review §3.4,
+ * Jeff: gates need names that tell them apart). Walks every duct below the gate to the tools at the ends, through
+ * splits and other gates, in layout order. Falls back to the kind's name, then the id.
+ */
+export function gateName(doc: ShopDoc | null, gate: RawEl | null | undefined): string {
+  if (!gate) return '';
+  const own = ((gate['name'] as string | undefined) ?? '').trim();
+  if (own && !DEFAULT_GATE_NAMES.has(own)) return own;
+  const tools: string[] = [];
+  const seen = new Set<string>();
+  for (const sys of systemsOf(doc)) {
+    const els = new Map((sys.elements as RawEl[]).map((e) => [e['id'] as string, e]));
+    const below = (id: string): void => {
+      if (seen.has(id)) return;
+      seen.add(id);
+      for (const d of sys.ducts as RawEl[]) {
+        if (d['parent'] !== id) continue;
+        const child = els.get(d['child'] as string);
+        if (!child) continue;
+        if (child['type'] === 'tool') { const n = displayName(doc, child); if (n && !tools.includes(n)) tools.push(n); }
+        else below(child['id'] as string);
+      }
+    };
+    if (els.has(gate['id'] as string)) below(gate['id'] as string);
+  }
+  if (tools.length) return tools.length <= 2 ? tools.join(' & ') : `${tools.slice(0, 2).join(', ')} and ${tools.length - 2} more`;
+  return own || (gate['id'] as string) || '';
+}
+
 // ── editing ─────────────────────────────────────────────────────────────────
 
 /**

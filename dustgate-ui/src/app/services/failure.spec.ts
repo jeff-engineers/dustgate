@@ -29,8 +29,11 @@ console.info = (...a: unknown[]) => { infos.push(a); };
   eq('...in the guide bar words, with how many more', failureReason({ status: 400, error: { error: 'invalid topology',
      errors: [{ message: 'system "s2": systems not an array' }, { message: 'second' }] } }), 'systems not an array (and 1 more)');
   eq('a string answer', failureReason({ status: 400, error: 'bad tool' }), 'bad tool');
-  eq('an HTML answer is not a reason', failureReason({ status: 502, error: '<html>Bad Gateway</html>' }), 'the shop brain refused it (HTTP 502)');
-  eq('a bare refusal still says something', failureReason({ status: 500, error: null }), 'the shop brain refused it (HTTP 500)');
+  eq('a gateway error is no answer', failureReason({ status: 502, error: '<html>Bad Gateway</html>' }), "the shop brain didn't answer");
+  eq('a 500 with no reason is no answer (the dev proxy, the brain down)', failureReason({ status: 500, error: null }), "the shop brain didn't answer");
+  check('...and counts as no answer for the offline states', noAnswer({ status: 500, error: null }));
+  eq('a bare 4xx is turned down, with no code in the words', failureReason({ status: 409, error: null }), 'the shop brain turned it down');
+  eq('a 500 that carries a reason passes the reason on', failureReason({ status: 500, error: { error: 'disk full' } }), 'disk full');
   eq('our own Error keeps its message', failureReason(new Error('too close to Port 3')), 'too close to Port 3');
   check('never empty', failureReason(null).length > 0 && failureReason(undefined).length > 0);
 }

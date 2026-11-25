@@ -3,7 +3,9 @@
    was until 2026-09-07) made mobile Safari lay the page out against the LARGE
    viewport, so the toolbar and guide bar sat under the browser chrome with no way
    to scroll them back into view — the canvas is the scroller, not the page. */
-:host { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; }
+/* overflow-x: clip as well: one row that would not wrap (the plug sweep) slid the whole page 15 px sideways at 375 px
+   and clipped the title and the menu button (review §5.1). */
+:host { display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden; overflow-x: clip; max-width: 100vw; }
 /* Wraps rather than clips: the row already overflowed a phone-width viewport
    before Boards was added, silently pushing Save off the edge. */
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 12px 16px;
@@ -31,6 +33,12 @@
 /* position: relative so the zoom control can anchor to the stage rather than to
    the canvas's scrolled content — see the note on .zoomer in the template. */
 .stage { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+.load-failed { position: absolute; inset: 0; z-index: 30; background: var(--bg); display: flex; flex-direction: column;
+               align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center; }
+.load-failed .lf-title { font-size: 15px; font-weight: 600; margin: 0; }
+.load-failed .lf-sub { font-size: 13px; color: var(--muted); margin: 0 0 6px; max-width: 320px; }
+.load-failed button { background: var(--accent); color: #1a1200; border: 0; border-radius: 10px; padding: 10px 22px;
+                      font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
 /* overflow stays auto — it is what makes the element scrollable at all, which the
    pan gesture, the zoom anchoring and the wheel all drive through scrollLeft/Top.
    Only the BARS are hidden: they framed the drawing in permanent grey furniture,
@@ -336,14 +344,14 @@ svg.canvas, svg.canvas text { -webkit-user-select: none; user-select: none; }
 /* The slow sweep's own strip, under the tray. Separate from .tray because it
    reports a different question — "which plugs exist", which takes a minute —
    and must not compete with the chips for the same row. */
-.sweep { flex: 0 0 auto; display: flex; align-items: center; gap: 9px;
+.sweep { flex: 0 0 auto; display: flex; align-items: center; gap: 6px 9px; flex-wrap: wrap;
          background: var(--surface); border-top: 1px solid var(--border);
          padding: 6px 10px; min-height: 32px; }
 .sweep .bar { flex: 1 1 auto; height: 4px; border-radius: 2px;
               background: var(--border); overflow: hidden; min-width: 40px; }
 .sweep .bar i { display: block; height: 100%; background: var(--accent);
                 border-radius: 2px; transition: width 240ms linear; }
-.sweep .lbl { font-size: 11px; color: var(--muted); flex: 0 0 auto;
+.sweep .lbl { font-size: 11px; color: var(--muted); flex: 0 1 auto; min-width: 0;
               font-variant-numeric: tabular-nums; }
 .sweep .act { background: var(--bg); border: 1px solid var(--border); color: var(--text);
               font-size: 11px; padding: 4px 9px; border-radius: 8px; flex: 0 0 auto; }

@@ -130,7 +130,7 @@ function buildToken(): string {
     <div class="build-stamp">
       <span>build {{ build }}</span>
       <span *ngIf="app" [title]="'model ' + modelHash">· app {{ app }}</span>
-      <span *ngIf="device">· device {{ device }}</span>
+      <span *ngIf="device">· brain {{ device }}</span>
     </div>
   `
 })

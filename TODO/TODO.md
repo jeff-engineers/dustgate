@@ -44,15 +44,29 @@ are in `TODO/audit-2026-11-23.md`. The big cuts there (ESP32 brain, RF, PWM) are
   "Reads missed" in developer mode).
 - **PWM servos are much less repeatable than the serial ones** (no surprise). Worth a number when the harness or the
   bench can measure it; it is another point for "every gate on a serial servo" (audit §2).
-- **The canvas menu's "Find boards" should just say "Boards".**
-- **The canvas menu should reach the Gates page too**, beside Boards.
-- **Unplugging a gate by dropping its cable on nothing is too easy to do by accident.** Ask first, and/or make it a
-  right-click / long-press action on the cable or the tab rather than a plain drag.
-- **Gate (and servo) names must tell gates apart.** Four rows reading "Ball valve" is confusing: auto-name a gate from
-  what it feeds ("Planer valve"), or make it obvious a name is needed and must be unique.
 - **A servo and its gate are one thing to a woodworker** (physically tied, so they should read as electrically tied).
   Move or add the servo actions (Find it, Test move, Find its servo, Replace) onto the gate, and re-think whether the
   Boards page should list servos at all.
+
+## Direction (Jeff, 2026-11-25) — not started
+
+- **Editing the shop on a phone is still the big UI problem.** Next: an interactive mockup (docs/mockups/, on Jeff's
+  real layout) of (1) a LIST editor for the plumbing — the shop as an indented tree, collector → trunk → split → gate →
+  tool, big rows, tap for actions, "Add" offering what fits — and (3) wiring and sensing taken off the canvas: each
+  gate's own page says its board and servo (Find its servo), each tool's its plug or clamp. The canvas stays as the
+  overview and the laptop editor. After the bug burndown (Jeff, 2026-11-25).
+- **Consistent navigation on every page**: one header, one back, one way to reach Layout, Live, Gates, Boards and
+  Settings (fold in the UI review's §3.3).
+- **PWM servos are going** (99% decided), but **not until Jeff has enough serial servos to convert the whole shop**:
+  until then PWM keeps working and gets fixes, just nothing new. Why serial: repeatable where PWM drifts, 16 ft of
+  extension where PWM struggled at 4 ft, quieter (it sounds like a better-made thing), and it TELLS us — "the board
+  refused the move" while rewiring is information a PWM servo can never give. Then **pare the custom PCB down hard**,
+  and make a board OPTIONAL for gates and systems with no bin beam or CT clamp — the Seeed bus board alone drives gates.
+- **Asking for suction at a tool by hand, without buttons**, now that one brain drives many gates: a touchscreen (or
+  several) near the tools, listing the tools with an on/off for each. Options and their trade-offs are in the session
+  notes of 2026-11-25; the leading idea is a self-contained ESP32 touchscreen as its own WiFi panel (no wiring to any
+  gate board), using the brain's manual-tool route that the Live page uses. The existing status screen (SSD1306 OLED,
+  I2C at 0x3C on D4/D5) stays for a board's own status.
 
 ## Pi bring-up (started 2026-10-06; the Pi runs the shop since 2026-10-11)
 

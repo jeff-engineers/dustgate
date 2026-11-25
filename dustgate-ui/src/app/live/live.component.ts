@@ -584,12 +584,17 @@ const POLL_MS = 2000;
 
     <ng-template #noShop>
       <div class="empty">
+        <!-- Before the first answer, no tools is not "no shop": it offered to set the shop up over one that exists
+             (review §2.5). "No shop configured yet" is said only after the brain answered that it has none. -->
+        <p *ngIf="reading && !loadFailed">Reading your shop…</p>
         <ng-container *ngIf="loadFailed; else noLayout">
           <p>Can't read your shop's layout — {{ loadFailed }}. Trying again…</p>
         </ng-container>
         <ng-template #noLayout>
-          <p>No shop configured yet.</p>
-          <p><a routerLink="/build">Set up your shop →</a></p>
+          <ng-container *ngIf="!reading">
+            <p>No shop configured yet.</p>
+            <p><a routerLink="/build">Set up your shop →</a></p>
+          </ng-container>
         </ng-template>
         <!-- The nav above is inside the has-tools branch, so without this a device
              with no layout — the one most likely to need Forget WiFi — has no way
@@ -681,12 +686,16 @@ export class LiveViewComponent implements OnInit, OnDestroy {
 
   /** Read the layout, or leave us in the empty state. Retried by tick() for as
    *  long as we have no tools, so a device that comes up late is picked up. */
+  /** True until the brain has answered the first read, either way. */
+  reading = true;
   private async loadTopology(): Promise<void> {
     let doc: Topology | null = null;
     try {
       doc = await this.api.getTopology();
       this.loadFailed = '';
+      this.reading = false;
     } catch (e) {
+      this.reading = false;
       this.tools = [];      // not configured yet, or not answering yet
       // Only a 404 is "no shop yet". Anything else used to show "No shop configured yet — Set up your shop" over a shop
       // that exists and a brain that just didn't answer (2026-10-17). Retried by tick() either way.

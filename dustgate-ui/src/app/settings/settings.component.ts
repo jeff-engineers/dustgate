@@ -363,6 +363,8 @@ export class SettingsComponent implements OnInit {
   servoMin = 400; servoMax = 2600;
   /** The layout's range has been read. Until then the inputs hold defaults, and saving them would overwrite the shop's. */
   servoLoaded = false;
+  /** Why the layout's settings could not be read; '' while reading or once read. */
+  unread = '';
   private savedServo = { minUs: 400, maxUs: 2600 };
   servoValid(): boolean {
     const a = Number(this.servoMin), b = Number(this.servoMax);
@@ -370,7 +372,7 @@ export class SettingsComponent implements OnInit {
   }
   servoChanged(): boolean { return Number(this.servoMin) !== this.savedServo.minUs || Number(this.servoMax) !== this.savedServo.maxUs; }
   servoNote(): string {
-    if (!this.servoLoaded) return 'Reading the shop\'s range…';
+    if (!this.servoLoaded) return this.unread || 'Reading the shop\'s range…';
     return this.servoValid()
       ? `${this.savedServo.minUs}–${this.savedServo.maxUs} µs now`
       : `Whole µs, ${this.bounds.min}–${this.bounds.max}, at least ${this.bounds.span} apart`;
@@ -397,7 +399,7 @@ export class SettingsComponent implements OnInit {
   }
   failsafeChanged(): boolean { return Math.round(Number(this.failsafeSec) * 1000) !== this.savedFailsafeMs; }
   failsafeNote(): string {
-    if (!this.servoLoaded) return 'Reading the shop\'s setting…';
+    if (!this.servoLoaded) return this.unread || 'Reading the shop\'s setting…';
     return this.failsafeValid()
       ? `${this.savedFailsafeMs / 1000} s now${this.savedFailsafeMs === this.fsBounds.dflt ? ' (the default)' : ''}`
       : `${this.fsBounds.min / 1000} to ${this.fsBounds.max / 1000} seconds`;
@@ -427,7 +429,13 @@ export class SettingsComponent implements OnInit {
       this.dev.on$.next(this.devMode);
       this.servoLoaded = true;
       this.cd.markForCheck();
-    }).catch(() => { /* no layout yet: nothing to save the range into, and Save stays off */ });
+    }).catch((e) => {
+      // Save stays off either way; the notes say why instead of "Reading…" for ever (review §2.3).
+      this.unread = (e as { status?: number })?.status === 404
+        ? 'There is no shop layout yet — draw one first.'
+        : reportFailure('Settings · read the layout', e, `Can't read it — ${failureReason(e)}. Open Settings again once it answers.`);
+      this.cd.markForCheck();
+    });
   }
 
   /** A missing layout is normal, not an error — someone can open Settings on a

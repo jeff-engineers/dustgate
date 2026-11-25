@@ -21,7 +21,8 @@
   <!-- Leaving the canvas is a top-level intent, not an "other action" — burying
        it in the overflow made the way out the hardest thing on the bar. Import
        and Export stay there: both are rare, and neither is how you finish. -->
-  <button routerLink="/shop">Done</button>
+  <!-- Done KEEPS what you did: it saves, then leaves (review §4.2). A save that fails stays here, with its reason. -->
+  <button (click)="done()" [disabled]="saving">Done</button>
   <button class="ico" (click)="moreOpen = !moreOpen" [class.on]="moreOpen" title="More" aria-label="More actions">
     <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="5" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="19" cy="12" r="1.9"/></svg>
   </button>
@@ -32,11 +33,13 @@
     <!-- A shop grows a second collector roughly once, which is what puts it here
          rather than on the toolbar. -->
     <button (click)="moreOpen = false; addSystem()" [disabled]="!hasShop">Add system</button>
-    <button (click)="moreOpen = false; goBoards()">Find boards</button>
+    <!-- The shop's other pages, named as the pages are (Jeff, 2026-11-25: "Find boards" was a page called Boards). -->
+    <button (click)="moreOpen = false; goBoards()">Boards</button>
+    <button (click)="moreOpen = false; goGates()">Gates</button>
     <!-- The twin of Boards: a page of plugs, with the scan and the sweep on it. Replaces "Find plugs", which only
          refreshed the tray and read as a page that failed to open. -->
     <button (click)="moreOpen = false; goPlugs()">Plugs</button>
-    <!-- Same reasoning as Find boards: an errand you run rarely. The canvas is
+    <!-- Same reasoning as Boards: an errand you run rarely. The canvas is
          where you actually spend time, so it needs a way in that doesn't route
          through the Live view. -->
     <!-- The blunt version of deleting a system: back to the first collector alone. Last, set apart, and a confirm
@@ -66,6 +69,13 @@
 </div>
 
 <div class="stage">
+  <!-- THE LAYOUT COULD NOT BE READ (review §2.4): the stand-in drawn underneath (a lone collector, a default board) looked
+       like the shop had been wiped. Covered, with what happened and the one useful thing to do. Saving stays off. -->
+  <div class="load-failed" *ngIf="loadFailed">
+    <p class="lf-title">Couldn't load your layout — {{ loadFailed }}.</p>
+    <p class="lf-sub">Your shop is safe on the brain; nothing here will be saved. It may be restarting.</p>
+    <button type="button" class="primary" (click)="reload()">Try again</button>
+  </div>
   <!-- Every interactive handle stops propagation in its own pointerdown, so a
        pointerdown that reaches this element is BY DEFINITION on empty board —
        which makes it the pan gesture, with no hit-testing of our own. -->
@@ -464,10 +474,9 @@
      and any name-match hint are in the tooltip. They were on the chip at first
      and turned a glanceable strip into three rows of prose. -->
 <div class="tray" *ngIf="showTray" [class.armed]="armedTool">
-  <!-- "Devices", not "Outlets": one of the things in here is not an outlet. A
-       clamp is the first sensing device DustGate cannot FIND — it has no address
-       — so it is listed because a board declared it, and the row says which. -->
-  <span class="t">Devices</span>
+  <!-- "Outlets & CT clamps" (Jeff, 2026-11-25; D-72): both, because a clamp is not an outlet — it has no address and
+       is listed because a board declared it, and the row says which. Not "Devices": a tool is a tool. -->
+  <span class="t">Outlets &amp; CT clamps</span>
   <span class="n">{{ trayNote() }}</span>
   <div class="chips">
     <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
@@ -569,7 +578,9 @@
      The [X] is here, not inside app-selector-config, because it has to sit above
      BOTH panes that component can show (board wiring, travel calibration) without
      each one growing its own close button. -->
-<div class="sheet-bg" *ngIf="configuring" (pointerdown)="configuring = null"></div>
+<!-- A sheet that holds edits closes only by its own ✕ or Save: a tap on the dimmed canvas (most of a phone screen)
+     threw away what was entered, with no question (review §4.1). The dim still keeps taps off the canvas. -->
+<div class="sheet-bg" *ngIf="configuring"></div>
 <div class="sheet" *ngIf="configuring as cfg">
   <button type="button" class="sheet-close" (click)="configuring = null" aria-label="Close without saving">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -607,6 +618,20 @@
 </div>
 
 
+<!-- Unplug a gate: asked when a cable is let go over nothing (also on the gate's own menu, which does not ask). -->
+<div class="sheet-bg" *ngIf="unplugAsk" (pointerdown)="unplugAsk = null"></div>
+<div class="sheet narrow" *ngIf="unplugAsk as ua">
+  <div class="card removal" role="dialog" aria-labelledby="unplug-title">
+    <div class="head"><span class="kind" id="unplug-title">Unplug the {{ ua.gate }} from {{ ua.board }}?</span></div>
+    <p class="q-sub">It stays on the layout, not wired to a board, and doesn't move until you plug it in again. Undo puts it
+      back.</p>
+    <div class="actions">
+      <button type="button" (click)="unplugAsk = null">Keep it plugged in</button>
+      <button type="button" class="primary" (click)="confirmUnplug()">Unplug</button>
+    </div>
+  </div>
+</div>
+
 <!-- Delete a system / Clear shop: one sheet, saying what goes and what stays before anything happens. -->
 <div class="sheet-bg" *ngIf="removalAsk" (pointerdown)="removalAsk = null"></div>
 <div class="sheet narrow" *ngIf="removalAsk as ra">
@@ -635,7 +660,7 @@
      you pair. Taking it over is here for the same reason: sending someone away to
      pair it first and come back was an errand invented by an implementation
      detail, not by anything the user cares about. -->
-<div class="sheet-bg" *ngIf="renamingChip" (pointerdown)="renamingChip = null"></div>
+<div class="sheet-bg" *ngIf="renamingChip"></div>   <!-- closes by ✕ or Save only (review §4.1) -->
 <div class="sheet narrow" *ngIf="renamingChip as rc">
   <button type="button" class="sheet-close" (click)="renamingChip = null" aria-label="Close without renaming">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -712,7 +737,7 @@
 <!-- Pairing a tool with its plug — same sheet as a gate. A COLLECTOR gets its own
      sheet below: it is switched and watched by two different things, which one
      plug slot cannot say. -->
-<div class="sheet-bg" *ngIf="outletTool" (pointerdown)="outletTool = null"></div>
+<div class="sheet-bg" *ngIf="outletTool"></div>   <!-- closes by ✕ or Save only (review §4.1) -->
 <div class="sheet" *ngIf="outletTool as ot">
   <button type="button" class="sheet-close" (click)="outletTool = null" aria-label="Close without saving">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
