@@ -15,7 +15,7 @@ import {
   addMachineWithPort, addSupplementalPort, addSystem, displayName, isPortEnabled, isShopDoc, machineById,
   collectorOf, machineIdOfPort, machineOfPort, machinesOf, outletExcludes, outletOf,
   outletTakenByAnotherMachine,
-  portsOf, primaryPortOf, removeMachine, removePort, dropFromChains,
+  portsOf, primaryPortOf, removeMachine, removePort, dropFromChains, gateName,
   healMachineNames, renameMachine, setOutlet, clampUsers, clampOffered, planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf,
   systemById, systemLabel, systemViews, systemsInLayoutOrder, systemsOf, toShop,
 } from './shop-doc';
@@ -125,6 +125,23 @@ const oneSystem = () => JSON.parse(JSON.stringify({
   eq('...no machines', machinesOf(big).length, 0);
   eq('...boards stay paired', big.controllers.length, 1);
   check('...and it validates', validateShop(big).ok, JSON.stringify(validateShop(big).errors));
+}
+
+// ── a gate is called by the tools it feeds until someone names it (review §3.4) ──
+{
+  const shop = toShop(oneSystem() as never)!;
+  const g = () => systemById(shop, 'system-1')!.elements.find((e) => e['id'] === 'gate')!;
+  eq('a gate named "Gate" reads as the tool it feeds', gateName(shop, g()), 'Table saw');
+  g()['name'] = 'Ball valve';
+  eq('so does one still called by its kind', gateName(shop, g()), 'Table saw');
+  g()['name'] = 'Saw corner';
+  eq('a name someone chose wins', gateName(shop, g()), 'Saw corner');
+  g()['name'] = '';
+  const s1 = systemById(shop, 'system-1')!;
+  s1.elements.push({ id: 'saw2', type: 'tool', name: 'Bandsaw', machineId: 'saw2' } as RawEl);
+  shop.machines.push({ id: 'saw2', name: 'Bandsaw' } as never);
+  s1.ducts.push({ child: 'saw2', parent: 'gate', parentBranch: 'b1' } as RawEl);
+  eq('two tools read as both', gateName(shop, g()), 'Table saw & Bandsaw');
 }
 
 // ── the demo seed is a valid shop (2026-11-23: a stale `drives: "linear"` left the public demo's Live view dead) ──

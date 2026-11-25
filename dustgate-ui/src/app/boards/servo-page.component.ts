@@ -17,6 +17,7 @@ import { absoluteAngles } from '@topology';
 import { configurableSelectorsOf, selectorsOnController, type ConfigurableSelector } from '../gates/selector-types';
 import { busNumberOf, usualLoad } from './bus-servos';
 import { setServoNumber } from '@shop-edit';
+import { gateName, type ShopDoc } from '../services/shop-doc';
 
 @Component({
   selector: 'app-servo-page',
@@ -196,7 +197,7 @@ export class ServoPageComponent implements OnInit, OnDestroy {
     // `bus-N` is a servo no gate holds (Boards lists it as "not tied to a gate"); anything else is the gate's id.
     if (this.gateKey.startsWith('bus-')) { this.bus = Number(this.gateKey.slice(4)); this.name = 'A servo not tied to a gate'; return; }
     this.sel = this.topo ? selectorsOnController(this.topo, this.board).find((s) => s.id === this.gateKey) ?? null : null;
-    this.name = this.sel?.name || this.gateKey;
+    this.name = this.sel ? gateName(this.topo as unknown as ShopDoc, this.sel as never) : this.gateKey;
     this.bus = this.sel ? busNumberOf(this.sel) : undefined;
   }
 

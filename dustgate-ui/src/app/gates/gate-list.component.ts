@@ -9,7 +9,7 @@ import {
   AnyElement, ConfigurableSelector, commandAngle, controllersOf, elementsOf,
   isCalibrated, isConfigurableSelector, isServoKind, kindLabel, swingSequence,
 } from './selector-types';
-import { type ShopDoc, systemLabel, systemsInLayoutOrder, toShop } from '../services/shop-doc';
+import { type ShopDoc, gateName, systemLabel, systemsInLayoutOrder, toShop } from '../services/shop-doc';
 import { replaceElement } from '@shop-edit';
 
 // ── The gates screen ─────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ export class GateListComponent implements OnInit {
         .filter(isConfigurableSelector)
         .map((sel) => ({
           sel,
-          name: (sel as { name?: string }).name || sel.id,
+          name: gateName(this.topo as unknown as ShopDoc, sel as never),   // by the tools it feeds until named (review §3.4)
           kind: kindLabel(sel),
           where: this.where(sel),
           calibrated: isCalibrated(sel),

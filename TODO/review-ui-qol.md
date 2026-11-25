@@ -183,11 +183,7 @@ Layout and the log only.
 or six destinations from Live, the canvas menu and Settings, Plugs included.
 
 ### 3.4 [M] Gates are listed by kind, so four rows read "Ball valve"
-**Where:** Gates list (`gates/gate-list.component.ts:128-129`, `name: sel.name || sel.id`, sub `kind · where`).
-**What:** In the demo every row's title is "Ball valve" and its subtitle starts "Ball valve · …". To recalibrate the
-table saw's gate you read the board name in the small print. Add a servo shows `g.name || g.id` too.
-**Fix:** Title a gate by the tools it serves ("Table Saw", "Router Table & Jointer") when its name is empty or equals
-its kind; the kind goes in the subtitle once.
+**FIXED 2026-11-23** — A gate is called by the tools it feeds until someone names it
 
 ### 3.5 [M] Removing a plug from a tool is three verbs
 **Where:** Tools/canvas sheet "Remove outlet" / "Remove" (`tools/paired-outlet-row.component.ts:116`, `:155`); Plugs

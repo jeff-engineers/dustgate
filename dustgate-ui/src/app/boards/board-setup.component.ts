@@ -9,7 +9,7 @@ import { ApiService, DiscoveredNode, NodeLinkState, SenseReport, clampsOn } from
 import type { Topology } from '@topology';
 import { systemsOf } from '@shop';
 import { bareHost } from '@device-model';
-import { clampUsers, machineOfPort, type ShopDoc } from '../services/shop-doc';
+import { clampUsers, gateName, machineOfPort, type ShopDoc } from '../services/shop-doc';
 import { isOptionalBoard } from '@shop';
 import { MAX_BUS_SERVOS_PER_HOST } from '@topology';
 import { DevModeService } from '../services/dev-mode';
@@ -391,7 +391,9 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
   busLines(r: BoardRow): BusServoLine[] {
     const gates = this.topo ? selectorsOnController(this.topo, r.id) : [];
     const c = this.topo ? controllersOf(this.topo).find((x) => x.id === r.id) : undefined;
-    return busServoLines(gates, r.link?.bus ?? [], c?.chains ?? []);
+    // Each servo row by its gate's name, which falls back to the tools the gate feeds (gateName, review §3.4).
+    const named = gates.map((g) => ({ ...g, name: gateName(this.topo as unknown as ShopDoc, g as never) }));
+    return busServoLines(named, r.link?.bus ?? [], c?.chains ?? []);
   }
   /** Rows keep their DOM across the 3 s refresh (busLines builds new objects each time), so a tap is never lost. */
   lineKey = (_: number, l: BusServoLine) => l.gateId ?? `bus-${l.bus}`;

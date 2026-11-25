@@ -23,7 +23,7 @@ import {
   type ShopDoc, type ShopSystem,
   addMachineWithPort, addSupplementalPort, addSystem, clampOf, isPortSupplemental, machineById, machineOfPort,
   machinesOf, NEW_MACHINE_NAME, outletExcludes, outletOf, portsOf, primaryPortOf, setOutlet,
-  removeMachine, removePort, dropFromChains,
+  removeMachine, removePort, dropFromChains, gateName,
   renameMachine,
   supplementalCount,
   systemById, systemsOf, systemViews, toShop, clampOffered, clampBoardOf, clampTakenBy,
@@ -4716,7 +4716,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   /** "Unplug the Miter Saw Valve from Serial 1?" — the question a cable dropped on nothing asks. */
   unplugAsk: { gateId: string; gate: string; board: string } | null = null;
   private askUnplug(gateId: string): void {
-    this.unplugAsk = { gateId, gate: (this.elem(gateId)?.['name'] as string) || 'this gate', board: this.boardName(this.boardOf(gateId)) || 'its board' };
+    this.unplugAsk = { gateId, gate: gateName(this.topo as unknown as ShopDoc, this.elem(gateId)) || 'this gate', board: this.boardName(this.boardOf(gateId)) || 'its board' };
   }
   confirmUnplug(): void {
     const a = this.unplugAsk; this.unplugAsk = null;
