@@ -260,10 +260,7 @@ Save for the layout.
 **FIXED 2026-11-23** — The canvas no longer slides sideways at phone width
 
 ### 5.2 [H] The canvas tool sheet's yes/no overflows at phone width
-**Where:** `tools/element-outlet-config.component.ts` `.q` / `.yesno` styles.
-**What:** At 375 px "Is it on a smart plug?" wraps one word per line and "No, I switch it on myself" runs off the
-sheet's right edge, half hidden.
-**Fix:** Stack the question above the two buttons, and let the buttons wrap.
+**FIXED 2026-11-23** — A tool's yes/no question stacks above its answers on a phone
 
 ### 5.3 [M] The piece badge is a 17 px target at the phone's starting zoom
 **Where:** `build.component.html:283-284` (hit `r=14`, drawn `r=7`, scaled with the canvas).

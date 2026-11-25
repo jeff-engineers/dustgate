@@ -43,10 +43,12 @@ interface RawEl { [k: string]: unknown; }
     .badge.ok   { color: var(--success); background: rgba(60,190,110,0.12); }
     .badge.todo { color: var(--accent);  background: rgba(240,165,0,0.12); }
 
-    .q { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    /* The question wraps above its two answers when they don't fit beside it: at 375 px it went one word to a line and
+       "No, I switch it on myself" ran off the sheet (review §5.2). */
+    .q { display: flex; align-items: center; justify-content: space-between; gap: 8px 10px; flex-wrap: wrap;
          padding: 11px 13px; background: var(--bg); border: 1px solid var(--border);
          border-radius: 12px; margin-bottom: 14px; font-size: 14px; }
-    .q .yesno { display: flex; gap: 6px; flex-shrink: 0; }
+    .q .yesno { display: flex; gap: 6px; flex-wrap: wrap; flex: 0 1 auto; max-width: 100%; }
     .q button { background: var(--surface); border: 1px solid var(--border); color: var(--muted);
                 border-radius: 8px; padding: 6px 14px; font-size: 13px; }
     .q button.on { background: var(--success); border-color: var(--success); color: #05230f; font-weight: 600; }
