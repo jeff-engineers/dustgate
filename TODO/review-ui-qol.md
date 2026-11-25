@@ -228,11 +228,7 @@ servo "Set its positions"; Settings "Reset gate calibration — Start over" / "R
 ## 4. Dead ends and stranded edits
 
 ### 4.1 [H] Tapping outside a sheet throws away what you entered
-**Where:** every canvas sheet backdrop — `build.component.html:572`, `:585`, `:611`, `:638`, and the outlet/collector
-sheet (`(pointerdown)="… = null"`).
-**What:** Pick a plug, set the threshold, then brush the dimmed canvas above the sheet: the sheet closes, nothing
-saved, no question. On a phone the backdrop is most of the screen.
-**Fix:** Backdrop closes only an untouched sheet; a touched one asks (with the 3.2 sheet) or ignores the tap.
+**FIXED 2026-11-23** — A canvas sheet that holds edits closes only by its own ✕ or Save
 
 ### 4.2 [M] Done leaves without saving
 **Where:** `build.component.html:24` (`routerLink="/shop"`), guard `canLeave()` at `build.component.ts:5463`.

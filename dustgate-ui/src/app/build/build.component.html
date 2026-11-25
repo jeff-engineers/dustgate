@@ -569,7 +569,9 @@
      The [X] is here, not inside app-selector-config, because it has to sit above
      BOTH panes that component can show (board wiring, travel calibration) without
      each one growing its own close button. -->
-<div class="sheet-bg" *ngIf="configuring" (pointerdown)="configuring = null"></div>
+<!-- A sheet that holds edits closes only by its own ✕ or Save: a tap on the dimmed canvas (most of a phone screen)
+     threw away what was entered, with no question (review §4.1). The dim still keeps taps off the canvas. -->
+<div class="sheet-bg" *ngIf="configuring"></div>
 <div class="sheet" *ngIf="configuring as cfg">
   <button type="button" class="sheet-close" (click)="configuring = null" aria-label="Close without saving">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -635,7 +637,7 @@
      you pair. Taking it over is here for the same reason: sending someone away to
      pair it first and come back was an errand invented by an implementation
      detail, not by anything the user cares about. -->
-<div class="sheet-bg" *ngIf="renamingChip" (pointerdown)="renamingChip = null"></div>
+<div class="sheet-bg" *ngIf="renamingChip"></div>   <!-- closes by ✕ or Save only (review §4.1) -->
 <div class="sheet narrow" *ngIf="renamingChip as rc">
   <button type="button" class="sheet-close" (click)="renamingChip = null" aria-label="Close without renaming">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -712,7 +714,7 @@
 <!-- Pairing a tool with its plug — same sheet as a gate. A COLLECTOR gets its own
      sheet below: it is switched and watched by two different things, which one
      plug slot cannot say. -->
-<div class="sheet-bg" *ngIf="outletTool" (pointerdown)="outletTool = null"></div>
+<div class="sheet-bg" *ngIf="outletTool"></div>   <!-- closes by ✕ or Save only (review §4.1) -->
 <div class="sheet" *ngIf="outletTool as ot">
   <button type="button" class="sheet-close" (click)="outletTool = null" aria-label="Close without saving">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
