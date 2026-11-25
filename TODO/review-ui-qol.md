@@ -116,13 +116,7 @@ this is a phone app.
 ## 2. Failures, empty and offline states
 
 ### 2.1 [H] A failed load shows the empty state as well as the error
-**Where:** Tools (`tools/tool-setup.component.ts:297` — `!anythingToSetUp` with no error check); Gates
-(`gates/gate-list.component.ts:158`); Plugs (`plugs/plugs.component.ts:140`).
-**What:** With the brain stopped: "No tools to set up yet. Draw your plumbing first." above "Couldn't load your
-tools…"; same on Gates and Plugs ("No plugs are paired to a tool yet"). D-84: a list that failed to load is not an
-empty list — and "draw your plumbing first" sends someone to redraw a shop that exists.
-**Fix:** Gate each empty state on "loaded and no error", and say "Can't reach the brain — showing nothing until it
-answers. Trying again…" instead.
+**FIXED 2026-11-23** — A list that failed to load says so, and no longer claims to be empty
 
 ### 2.2 [H] Boards says nothing when the brain is down
 **Where:** `boards/board-setup.component.ts` — `refreshLinks()` failures go to `QuietPoll` only (`:858-866`).

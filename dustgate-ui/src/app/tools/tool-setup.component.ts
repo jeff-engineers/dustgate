@@ -294,7 +294,8 @@ interface SysGroup {
         </div>
       </div>
 
-      <div class="empty" *ngIf="!anythingToSetUp">No tools to set up yet. Draw your plumbing first.</div>
+      <!-- Empty only when the layout LOADED empty: a failed load is not an empty shop (D-84, review §2.1). -->
+      <div class="empty" *ngIf="!anythingToSetUp && !loadFailed">No tools to set up yet. Draw your plumbing first.</div>
       <p class="err" *ngIf="error">{{ error }}</p>
     </ng-container>
 
@@ -528,6 +529,8 @@ export class ToolSetupComponent implements OnInit {
 
   /** Is there anything on this screen at all? A system with a collector and no
    *  tools drawn yet is not empty — its blower still wants an outlet. */
+  /** The layout could not be read (not "there is none"): the empty state would be a false statement. */
+  loadFailed = false;
   get anythingToSetUp(): boolean {
     return this.groups.some(g => g.collector || g.tools.length);
   }
@@ -543,7 +546,10 @@ export class ToolSetupComponent implements OnInit {
       // empty shop, not a dead controller, and the empty state below already says
       // the right thing — claiming "couldn't reach" there sends someone hunting a
       // network fault that isn't real.
-      if ((e as { status?: number })?.status !== 404) this.error = reportFailure('Tools · load', e, `Couldn't load your tools — ${failureReason(e)}.`);
+      if ((e as { status?: number })?.status !== 404) {
+        this.loadFailed = true;
+        this.error = reportFailure('Tools · load', e, `Couldn't load your tools — ${failureReason(e)}.`);
+      }
       return;
     }
     this.rebuild();

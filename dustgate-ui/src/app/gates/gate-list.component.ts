@@ -155,7 +155,7 @@ interface GateGroup {
         </div>
       </div>
 
-      <div class="empty" *ngIf="!groups.length && loaded">
+      <div class="empty" *ngIf="!groups.length && loaded && !loadFailed">
         No gates configured yet. Draw your plumbing first.
       </div>
       <p class="err" *ngIf="error">{{ error }}</p>
@@ -173,6 +173,8 @@ export class GateListComponent implements OnInit {
   /** Selector id currently being swung, or '' — one at a time, shop-wide. */
   testing = '';
   loaded = false;
+  /** The layout could not be read: the error line says why, and the empty state stays hidden. */
+  loadFailed = false;
   error = '';
 
   private links: NodeLinkState[] = [];
@@ -186,6 +188,7 @@ export class GateListComponent implements OnInit {
       // A failed board list is "unknown", said in the console; the gates still list, without link dots.
       try { this.links = await this.api.getNodes(); } catch (e) { reportFailure('Gates · board links', e, '(gates listed without board status)'); this.links = []; }
     } catch (e) {
+      this.loadFailed = true;   // its own sentence below says why; "no gates yet" would contradict it (review §2.1)
       this.error = reportFailure('Gates · load', e, (e as { status?: number })?.status === 404
         ? 'There is no shop layout yet — draw one on the canvas first.'
         : `Couldn't load the gates — ${failureReason(e)}.`);

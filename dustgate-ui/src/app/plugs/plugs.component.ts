@@ -137,7 +137,7 @@ interface PlugRow {
         </div>
       </div>
     </div>
-    <div class="empty" *ngIf="!rows.length && loaded">No plugs are paired to a tool yet. Find one below, then pair it.</div>
+    <div class="empty" *ngIf="!rows.length && loaded && !loadFailed">No plugs are paired to a tool yet. Find one below, then pair it.</div>
 
     <ng-container *ngFor="let r of rows">
       <div class="confirm" *ngIf="confirmRelease === r.key">
@@ -200,6 +200,8 @@ export class PlugsComponent implements OnInit, OnDestroy {
   rows: PlugRow[] = [];
   outlets: DiscoveredOutlet[] = [];
   loaded = false;
+  /** The layout or the plug list could not be read: "no plugs yet" would be a false statement (review §2.1). */
+  loadFailed = false;
   ssid = '';
   error = '';
   note = '';
@@ -251,7 +253,10 @@ export class PlugsComponent implements OnInit, OnDestroy {
     try { this.topo = toShop(JSON.parse(JSON.stringify(await this.api.getTopology())) as Topology); }
     catch (e) {
       this.topo = null;   // no layout yet is normal: plugs exist before anyone has drawn anything
-      if ((e as { status?: number })?.status !== 404) reportFailure('Plugs · load the layout', e, '(plugs listed without their tools)');
+      if ((e as { status?: number })?.status !== 404) {
+        this.loadFailed = true;
+        this.error = reportFailure('Plugs · load the layout', e, `Couldn't load your tools — ${failureReason(e)}. The plugs below are shown without them.`);
+      }
     }
     this.rebuild();
   }
@@ -335,7 +340,7 @@ export class PlugsComponent implements OnInit, OnDestroy {
   async scan(): Promise<void> {
     this.scanning = true; this.error = '';
     try { this.outlets = await this.api.discoverOutlets(); }
-    catch (e) { this.outlets = []; this.error = reportFailure('Plugs · look for plugs', e, `Couldn't look for plugs — ${failureReason(e)}.`); }
+    catch (e) { this.outlets = []; this.loadFailed = true; this.error = reportFailure('Plugs · look for plugs', e, `Couldn't look for plugs — ${failureReason(e)}.`); }
     finally { this.scanning = false; this.rebuild(); }
     // Not awaited: asked one at a time, a shop's worth of plugs takes a while on an ESP32, and the page should not wait on
     // the slowest plug to appear. Each row fills in as its own answer arrives.
