@@ -15,7 +15,7 @@ import { MAX_BUS_SERVOS_PER_HOST } from '@topology';
 import { DevModeService } from '../services/dev-mode';
 import { busServoLines, type BusServoLine } from './bus-servos';
 import {
-  type Drives, DEFAULT_DRIVES, applyDrivesCache, drivesFromCaps, drivesFromHasLinear, resolveDrives,
+  type Drives, DEFAULT_DRIVES, applyDrivesCache, boardRoomText, drivesFromCaps, drivesFromHasLinear, resolveDrives,
   unpairPrompt,
   boardUses,
   boardInUse,
@@ -331,7 +331,9 @@ interface BoardRow {
       <div class="row" *ngFor="let n of unadded()">
         <div style="flex:1; min-width:0">
           <div class="nm">{{ n.host }}</div>
-          <div class="sub">{{ n.board }} · {{ n.ip }} · {{ n.servos }} servo channels</div>
+          <!-- What a board will hold is known once it is paired (its handshake says): before that, only that it is here.
+               The chip and the address are a developer's (review §1.4, §3.1). -->
+          <div class="sub">{{ dev ? n.board + ' · ' + n.ip : 'ready to pair' }}</div>
           <!-- Shown, not hidden: a board that is powered and answering but absent
                from this list looks exactly like one that never announced itself,
                and those two have opposite fixes. Naming the owner is what turns
@@ -840,20 +842,18 @@ export class BoardSetupComponent implements OnInit, OnDestroy {
     this.rebuild();
   }
 
+  /** What a board drives and how full it is — boardRoomText(), the same words and numbers the canvas uses (review §3.1).
+   *  The host and the firmware are a developer's details (review §1.4): shown in developer mode, or the host when the
+   *  board has been renamed away from it and someone may still need to match the two. */
   subtitle(r: BoardRow): string {
-    const bits: string[] = [];
-    // What it drives, in the words the canvas uses for its ports. Read-only: the
-    // board reported this, nobody chose it.
-    bits.push(r.drives === 'bus' ? 'bus servos' : 'servo valves');
-    bits.push(r.primary ? 'primary — runs the app' : (r.host || 'no address'));
-    // The build target is a developer's word ("xiao_c5"); the shop sees what it drives.
-    // A bus board drives up to six servos, at most one of them a slider (topology.js MAX_BUS_SERVOS_PER_HOST).
-    bits.push(r.drives === 'bus'
-      ? `${r.gates} of ${MAX_BUS_SERVOS_PER_HOST} servos`
-      : `${r.gates} of ${SERVO_CHANNELS_PER_BOARD} gates`);   // plural follows the ceiling, not the count
-    if (r.link?.fw) bits.push(`fw ${r.link.fw}`);
+    const bits = [boardRoomText(r.drives, r.gates, this.noPins(r))];
+    if (r.primary) bits.push('runs the app');
+    if (!r.primary && (this.dev || (r.host && r.name !== r.host))) bits.push(r.host || 'no address');
+    if (this.dev && r.link?.fw) bits.push(`fw ${r.link.fw}`);
     return bits.join(' · ');
   }
+  /** A brain with no servo pins of its own: the Pi. It drives nothing, whatever its cached `drives` says. */
+  noPins(r: BoardRow): boolean { return r.primary && this.api.deviceInfo?.role === 'native'; }
 
   go(path: string): void { void this.router.navigate([path]); }
   /** Back to the canvas in its WIRING view. Boards only matter there, so landing in

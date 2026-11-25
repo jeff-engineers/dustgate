@@ -49,14 +49,7 @@ draw), used by every screen; IP, hostname, kind and "pushes to this brain" go be
 address stays as the fallback (that is an input, not a display).
 
 ### 1.4 [H] Boards rows carry chip names, IPs, hostnames twice and firmware strings
-**Where:** `boards/board-setup.component.ts:329` (scan rows: `qtpy_s3 · 192.168.87.61 · 4 servo channels`);
-`subtitle()` at `:835-848` (`servo valves · dustgate-node-1 · 0 of 2 gates · fw 1.0.0-mock`).
-**What:** A freshly paired board is called `dustgate-node-1`, and its subtitle repeats `dustgate-node-1`. The scan
-list shows the build target (`devkitc`, `xiao_c5`) and the IP, which the comment at `:841` says is a developer's word.
-"servo valves" is a third name for gates.
-**Fix:** Scan rows: hostname as the name (it is what the board's own screen shows) and nothing else but what it
-drives. Paired rows: drop the host when the name is still the host, move `fw …` and the host to developer mode, say
-"gates" not "servo valves".
+**FIXED 2026-11-23** — Boards rows say what a board drives; host, chip, IP and firmware in developer mode
 
 ### 1.5 [M] The brain has five names
 **Where:** Live "Can't reach the **controller**" (`live/live.component.ts:391`); landing "No answer from the
@@ -141,14 +134,7 @@ get.
 ## 3. The same thing done the same way
 
 ### 3.1 [H] Canvas and Boards disagree about what a board drives
-**Where:** canvas glyph count `portUsedCount/portCapacity` (`build/build.component.ts:4129`) vs Boards `subtitle()`
-(`boards/board-setup.component.ts:843`); scan rows `{{ n.servos }} servo channels` (`:329`).
-**What:** Against the mock the same brain read **0/6** on the canvas (bus) and **"servo valves · 0 of 2 gates"** on
-Boards; the bus board `dustgate-wall` read "servo valves · 0 of 2 gates" on Boards though it reported a bus of 6; and
-a board offered as "4 servo channels" in the scan becomes "0 of 2 gates" once paired. Three numbers for one board's
-room.
-**Fix:** One `drivesOf()`/capacity function shared by both screens (`board-drives.ts` is the natural home), and the
-scan row says what the board will hold in the same words ("2 gates" / "6 bus servos").
+**FIXED 2026-11-23** — One rule for what a board drives; the canvas and Boards say the same
 
 ### 3.2 [H] Four ways to confirm something destructive
 **Where:** native `window.confirm` — Unpair (`board-setup.component.ts:539`, `build.component.ts:3951`), Take over
