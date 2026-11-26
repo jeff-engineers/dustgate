@@ -8,6 +8,7 @@ import { ElementOutletConfigComponent } from './element-outlet-config.component'
 import { CollectorSetupComponent } from './collector-setup.component';
 import { PairedOutletRowComponent } from './paired-outlet-row.component';
 import { resolveDeepLink } from './deep-link';
+import { plugName } from '../services/plug-name';
 import { elementsOf, ductsOf } from '../gates/selector-types';
 import { type ShopDoc, type RawEl as DocEl, collectorOf, isPortSupplemental, machineOfPort,
          outletExcludes, outletOf, outletTakenByAnotherMachine, renameMachine, systemLabel,
@@ -406,7 +407,7 @@ interface SysGroup {
                     (click)="pick(d, c)">
               <span class="dot" [class.on]="drawLevel(d) === 'on'" [class.low]="drawLevel(d) === 'low'"></span>
               <div style="flex:1">
-                <div class="pn">{{ d.name || d.hostname }}</div>
+                <div class="pn">{{ plugNameOf(d) }}</div>
                 <div class="ps">{{ plugSub(d, c) }}</div>
               </div>
               <span *ngIf="d.ip === c.ip">✓</span>
@@ -629,7 +630,8 @@ export class ToolSetupComponent implements OnInit {
    * renames the outlet in the Shelly app.
    */
   collectorPill(c: CollectorCfg): string {
-    return this.outlets.find(o => o.ip === c.ip)?.name || c.label || c.hostname || c.ip;
+    const seen = this.outlets.find(o => o.ip === c.ip);
+    return plugName({ name: seen?.name || c.label, hostname: c.hostname }, c.name);   // never a MAC or an IP (review §1.3)
   }
 
   /** Open a collector's pairing panel. Edits a deep copy — Cancel must leave the
@@ -703,7 +705,7 @@ export class ToolSetupComponent implements OnInit {
    * been no scan, which is exactly the order the row's own displayName() uses.
    */
   plugPill(t: ToolCfg): string {
-    const who = this.seenOutlet(t)?.name || t.label || t.hostname || t.ip;
+    const who = plugName({ name: this.seenOutlet(t)?.name || t.label, hostname: t.hostname }, t.name);   // never a MAC or an IP
     return `${who} · above ${t.thresholdW} W`;
   }
 
@@ -722,6 +724,8 @@ export class ToolSetupComponent implements OnInit {
     return d.powerW >= 5 ? 'on' : 'low';
   }
 
+  /** A found plug's name for a person, never its MAC (services/plug-name.ts). */
+  plugNameOf(d: DiscoveredOutlet): string { return plugName(d); }
   plugSub(d: DiscoveredOutlet, c: ToolCfg): string {
     if (this.isAssignedElsewhere(d.ip, c)) return 'already assigned to another tool';
     if (!d.reachable) return 'not responding';

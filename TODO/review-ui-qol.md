@@ -38,15 +38,7 @@ Zones:
 **FIXED 2026-11-23** — A brain that didn't answer says so, with no status code in the words
 
 ### 1.3 [H] Plugs are named by hostname and MAC, and their addresses are on screen
-**Where:** canvas tray chips (`build/build.component.html:479`, `o.name || o.hostname`); the plug picker
-(`tools/outlet-picker.component.ts:79`, `:152` — every row's second line is `hostname · IP`); Tools list pills
-("ShellyPlugUSG4-0F0E99229E66 · above 50 W", "shellyplugus-tablesaw"); Plugs rows (`Shelly · 192.168.87.30 · pushes
-to this brain`); the drag ghost (`html:564`); the chip rename sheet header (`html:644`).
-**What:** An unnamed plug reads as `ShellyPlugUSG4-84E6D7047170` — a MAC — in the tray, the picker and the Tools list.
-Every picker row and every Plugs row also prints its IP. The rule is no IPs or MACs in what a person reads.
-**Fix:** One display-name helper for a plug (its own name, else the tool it is on, else "Unnamed plug" plus its live
-draw), used by every screen; IP, hostname, kind and "pushes to this brain" go behind developer mode. Typing an
-address stays as the fallback (that is an input, not a display).
+**FIXED 2026-11-23** — A plug is called by its name or its tool, never its MAC; addresses in developer mode
 
 ### 1.4 [H] Boards rows carry chip names, IPs, hostnames twice and firmware strings
 **FIXED 2026-11-23** — Boards rows say what a board drives; host, chip, IP and firmware in developer mode

@@ -55,6 +55,7 @@ const SUITES = [
   ['services/wip-message.spec.js', 'wip-message'],
   ['services/layout-warning.spec.js', 'layout-warning'],
   ['services/failure.spec.js', 'failure'],
+  ['services/plug-name.spec.js', 'plug-name'],
   ['gates/selector-types.spec.js', 'selector-types'],
   ['tools/outlet-match.spec.js', 'outlet-match'],
   ['tools/deep-link.spec.js', 'deep-link'],

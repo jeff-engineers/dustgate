@@ -480,12 +480,12 @@
   <span class="n">{{ trayNote() }}</span>
   <div class="chips">
     <button *ngFor="let o of freeOutlets()" class="chip" [attr.data-level]="chipLevel(o)"
-            [title]="o.hostname + ' · ' + o.ip + (armedTool
+            [title]="plugName(o) + (armedTool
                        ? ' — tap to pair it with the armed piece'
                        : ' — drag it onto a tool or a collector to pair it, or tap to rename it')"
             (pointerdown)="onChipDown($event, o)">
       <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
-      <span class="nm">{{ o.name || o.hostname }}</span>
+      <span class="nm">{{ plugName(o) }}</span>
       <span class="w" *ngIf="chipLevel(o) !== 'idle'">{{ chipWatts(o) }}</span>
     </button>
     <!-- A clamp lives on a BOARD, so the chip names the board rather than the
@@ -513,9 +513,9 @@
          Not draggable. It is already somewhere; moving it is a repairing, and
          that belongs on the machine it is on, not on a chip in a tray. -->
     <span *ngFor="let o of claimedOutlets()" class="chip taken"
-          [title]="(o.name || o.hostname) + ' · ' + o.ip + ' — already on ' + o.owner + '. Open that machine to change it.'">
+          [title]="plugName(o) + ' — already on ' + o.owner + '. Open that machine to change it.'">
       <svg class="face" viewBox="0 0 24 24"><rect class="shell" x="3.5" y="3.5" width="17" height="17" rx="5"/><rect class="slot" x="8.4" y="7.6" width="2.1" height="5.6" rx="1"/><rect class="slot" x="13.5" y="7.6" width="2.1" height="5.6" rx="1"/><circle class="slot" cx="12" cy="16.4" r="1.5"/></svg>
-      <span class="nm">{{ o.name || o.hostname }}</span>
+      <span class="nm">{{ plugName(o) }}</span>
       <span class="on-m">on {{ o.owner }}</span>
     </span>
     <span class="tray-empty" *ngIf="!freeOutlets().length && !freeClamps().length && !claimedOutlets().length">
@@ -570,7 +570,7 @@
     <path d="M6 10.5h3.4M14.6 10.5h3.4"/><circle cx="12" cy="10.5" r="2.4"/>
     <path d="M12 17.5v3"/>
   </svg>
-  <span *ngIf="cd.outlet">{{ cd.outlet.name || cd.outlet.hostname }}</span>
+  <span *ngIf="cd.outlet">{{ plugName(cd.outlet) }}</span>
   <span *ngIf="cd.clamp">Clamp · {{ cd.clamp.name }}</span>
 </div>
 
@@ -666,12 +666,12 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
   </button>
   <div class="rename-card">
-    <div class="rn-head"><b>Outlet:</b> {{ rc.name || rc.hostname }}<span class="sep">—</span>Setup</div>
+    <div class="rn-head"><b>Outlet:</b> {{ plugName(rc) }}<span class="sep">—</span>Setup</div>
     <label class="rn-fld" for="chip-name">Outlet name</label>
     <input id="chip-name" class="rn-in" [(ngModel)]="chipDraft"
            [disabled]="(!chipRenamable(rc) && !chipOverride) || chipBusy"
            title="The name this outlet shows in the Shelly app. Saved to the outlet itself."/>
-    <div class="rn-meta">{{ rc.hostname }} · {{ rc.ip }}</div>
+    <div class="rn-meta" *ngIf="dev">{{ rc.hostname }} · {{ rc.ip }}</div>   <!-- developer mode only (review §1.3) -->
     <div class="rn-why" *ngIf="!chipRenamable(rc)">
       {{ chipRenameWhy(rc) }}
       <!-- The refusal is a gate, not a wall. Only the NAME is written — the outlet

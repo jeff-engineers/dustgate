@@ -3,6 +3,8 @@ import { failureReason, noAnswer, reportFailure } from '../services/failure';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService, DiscoveredOutlet } from '../services/api.service';
+import { DevModeService } from '../services/dev-mode';
+import { plugName } from '../services/plug-name';
 
 // ── Finding a tool's smart plug ──────────────────────────────────────────────
 // Identify-by-power: you can't tell which Shelly on the network is bolted behind
@@ -76,7 +78,7 @@ import { ApiService, DiscoveredOutlet } from '../services/api.service';
               [disabled]="!!excludeIps.includes(d.ip) || !d.reachable"
               (click)="picked.emit(d)">
         <span class="top">
-          <span class="nm">{{ d.name || d.hostname }}</span>
+          <span class="nm">{{ name(d) }}</span>
           <span class="w" *ngIf="level(d) !== 'off'">{{ d.powerW | number:'1.0-0' }} W</span>
         </span>
         <span class="meta">{{ sub(d) }}</span>
@@ -130,7 +132,10 @@ export class OutletPickerComponent implements OnInit {
   adding = false;
   addError = '';
 
-  ngOnInit(): void { void this.scan(); }
+  private readonly devMode = inject(DevModeService);
+  /** A plug's name for a person, never its MAC (services/plug-name.ts). */
+  name(d: DiscoveredOutlet): string { return plugName(d); }
+  ngOnInit(): void { this.devMode.load(); void this.scan(); }
 
   /** Draw tier. 'off' below 1 W (a Shelly's own standby), 'low' up to 5 W —
    *  something idling — and 'on' above it, which is a running motor. */
@@ -148,8 +153,9 @@ export class OutletPickerComponent implements OnInit {
     // SENSE-ONLY — no relay, which is the whole reason for using it — so it
     // behaves differently once paired, and that has to be visible BEFORE
     // picking rather than discovered afterwards.
-    const kind = d.kind === 'tasmota' ? 'Tasmota · sense only · ' : '';
-    return `${kind}${d.hostname} · ${d.ip}`;
+    const kind = d.kind === 'tasmota' ? 'Tasmota · reads power, never switches' : 'ready to pair';
+    // The hostname and the address are a developer's (review §1.3); the kind is the person's business.
+    return this.devMode.on$.value ? `${kind} · ${d.hostname} · ${d.ip}` : kind;
   }
 
   /** Probe one typed address and put the result in the list.
