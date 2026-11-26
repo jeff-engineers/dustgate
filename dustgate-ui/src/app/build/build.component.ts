@@ -30,6 +30,8 @@ import {
   planSystemRemoval, removeSystem, planClearShop, clearShop, plugIpsOf, collectorOf, type SystemRemoval,
 } from '../services/shop-doc';
 import { unwireGate, replaceBoard } from '@shop-edit';
+import { plugName as plugNameOf } from '../services/plug-name';
+import { DevModeService } from '../services/dev-mode';
 import { layoutWarning } from '../services/layout-warning';
 import { failureReason, noAnswer, reportFailure, reportNote, QuietPoll } from '../services/failure';
 import {
@@ -503,7 +505,7 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
   private oUp = (e: PointerEvent) => this.onODotUp(e);
 
   constructor(private api: ApiService, private route: ActivatedRoute,
-              private nav: NgRouter, private zone: NgZone, sanitizer: DomSanitizer) {
+              private nav: NgRouter, private zone: NgZone, sanitizer: DomSanitizer, private devMode: DevModeService) {
     const svg = (inner: string): SafeHtml =>
       sanitizer.bypassSecurityTrustHtml(`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">${inner}</svg>`);
     this.icons = {
@@ -538,7 +540,15 @@ export class BuildComponent implements OnInit, AfterViewInit, OnDestroy {
     };
   }
 
+  /** Developer mode (shop-wide): a plug's address and hostname are shown only then (review §1.3). */
+  get dev(): boolean { return this.devMode.on$.value; }
+  /** A plug's name for a person: its own, else the tool it is on, never its MAC (services/plug-name.ts). */
+  plugName(o: { name?: string | null; hostname?: string | null; host?: string | null; owner?: string } | null | undefined): string {
+    return plugNameOf(o, o?.owner);
+  }
+
   async ngOnInit(): Promise<void> {
+    this.devMode.load();
     let loaded: Topology | null = null;
     // Wait for the API key first — a 401 here is indistinguishable from "fresh device"
     // below, and would quietly replace a saved shop with a blank canvas.

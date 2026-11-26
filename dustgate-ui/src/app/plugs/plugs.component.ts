@@ -7,6 +7,8 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ApiService, DiscoveredOutlet, SweepProgress } from '../services/api.service';
+import { DevModeService } from '../services/dev-mode';
+import { plugName } from '../services/plug-name';
 import type { Topology } from '@topology';
 import {
   type ShopDoc, type RawEl,
@@ -107,11 +109,13 @@ interface PlugRow {
           <ng-container *ngIf="renaming !== r.key; else renameBox">
             <div class="nm">
               <span class="dot" [class.on]="state(r) === 'on'" [class.idle]="state(r) === 'idle'" [class.off]="state(r) === 'off'"></span>
-              {{ r.plugName || r.forName }}
+              {{ rowName(r) }}
               <span class="badge warn" *ngIf="state(r) === 'off'">Not answering</span>
               <span class="badge" *ngIf="readOnly(r)">Read only</span>
             </div>
-            <div class="sub">{{ r.kind === 'tasmota' ? 'Tasmota' : 'Shelly' }} · {{ r.ip }} · {{ how(r) }}</div>
+            <!-- The kind, the address and how it reports are a developer's (review §1.3); a Tasmota still says it can't switch. -->
+            <div class="sub" *ngIf="dev">{{ r.kind === 'tasmota' ? 'Tasmota' : 'Shelly' }} · {{ r.ip }} · {{ how(r) }}</div>
+            <div class="sub" *ngIf="!dev && r.kind === 'tasmota'">Tasmota — reads power, never switches</div>
             <div class="sub" *ngIf="r.forKind === 'tool'">Paired to the <b>{{ r.forName }}</b><ng-container *ngIf="r.thresholdW"> · starts collection above {{ r.thresholdW }} W</ng-container></div>
             <div class="sub" *ngIf="r.forKind === 'collector'">Paired to the collector <b>{{ r.forName }}</b></div>
             <div class="sub" *ngIf="state(r) === 'off' && !r.replacedBy">It may have a new address. Sweep to find it.</div>
@@ -141,11 +145,11 @@ interface PlugRow {
 
     <ng-container *ngFor="let r of rows">
       <div class="confirm" *ngIf="confirmRelease === r.key">
-        Release <b>{{ r.plugName || r.forName }}</b>? The {{ r.forName }} goes back to having no plug. The plug itself is handed back to whoever had it before.
+        Release <b>{{ rowName(r) }}</b>? The {{ r.forName }} goes back to having no plug. The plug itself is handed back to whoever had it before.
         <div class="btnrow"><button class="btn danger" (click)="release(r)">Release</button><button class="btn" (click)="confirmRelease = null">Cancel</button></div>
       </div>
       <div class="confirm" *ngIf="confirmTakeover === r.key">
-        Take over <b>{{ r.plugName || r.forName }}</b> from {{ r.seen?.holder || 'another brain' }}? Its push address is saved so releasing it later puts it back. That brain stops hearing this plug.
+        Take over <b>{{ rowName(r) }}</b> from {{ r.seen?.holder || 'another brain' }}? Its push address is saved so releasing it later puts it back. That brain stops hearing this plug.
         <div class="btnrow"><button class="btn danger" (click)="takeover(r)">Take over</button><button class="btn" (click)="confirmTakeover = null">Cancel</button></div>
       </div>
     </ng-container>
@@ -157,15 +161,15 @@ interface PlugRow {
       <div class="card">
         <div class="row" *ngFor="let d of found()">
           <div class="info">
-            <div class="nm"><span class="dot" [class.on]="d.reachable && d.powerW >= 5" [class.idle]="d.reachable && d.powerW < 5" [class.off]="!d.reachable"></span>{{ d.name || d.hostname || d.ip }}</div>
-            <div class="sub">{{ d.kind === 'tasmota' ? 'Tasmota' : 'Shelly' }} · {{ d.ip }} · {{ d.claim === 'foreign' ? 'belongs to ' + (d.holder || 'another brain') : (d.claim === 'dustgate' || d.claim === 'ours' ? 'ours' : 'unclaimed') }} · {{ d.reachable ? (d.powerW | number:'1.0-0') + ' W' : 'not answering' }}</div>
+            <div class="nm"><span class="dot" [class.on]="d.reachable && d.powerW >= 5" [class.idle]="d.reachable && d.powerW < 5" [class.off]="!d.reachable"></span>{{ foundName(d) }}</div>
+            <div class="sub">{{ d.kind === 'tasmota' ? 'Tasmota' : 'Shelly' }}{{ dev ? ' · ' + d.ip : '' }} · {{ d.claim === 'foreign' ? 'belongs to ' + (d.holder || 'another brain') : (d.claim === 'dustgate' || d.claim === 'ours' ? 'ours' : 'unclaimed') }} · {{ d.reachable ? (d.powerW | number:'1.0-0') + ' W' : 'not answering' }}</div>
             <div class="sub" *ngIf="d.reachable">Switch a tool on and watch for the plug that jumps.</div>
           </div>
           <div class="actions"><button class="act add" [disabled]="!d.reachable || !targets().length" (click)="pairing = d.ip">Pair to…</button></div>
         </div>
       </div>
       <div class="confirm" *ngIf="pairing as ip">
-        Pair <b>{{ ip }}</b> to which tool?
+        Pair <b>{{ foundNameAt(ip) }}</b> to which tool?
         <div class="btnrow" style="flex-wrap:wrap; margin-top:8px">
           <button class="btn" style="flex:0 0 auto" *ngFor="let t of targets()" (click)="pair(ip, t.id)">{{ t.name }}</button>
           <button class="btn" style="flex:0 0 auto" (click)="pairing = null">Cancel</button>
@@ -223,9 +227,10 @@ export class PlugsComponent implements OnInit, OnDestroy {
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private statusSub: Subscription | null = null;
 
-  constructor(private api: ApiService, private router: Router) {}
+  constructor(private api: ApiService, private router: Router, private devMode: DevModeService) {}
 
   async ngOnInit(): Promise<void> {
+    this.devMode.load();
     // No whenReady() here: every request waits for the API key itself, and gives up as "didn't answer" (api.service).
     await this.loadLayout();
     // Every await is a chance to have been left: starting the poll after that leaked it for the life of the app, one more
@@ -330,6 +335,13 @@ export class PlugsComponent implements OnInit, OnDestroy {
     return typeof live === 'number' ? live : (r.seen?.powerW ?? 0);
   }
   readOnly(r: PlugRow): boolean { return r.seen?.claim === 'foreign'; }
+  /** Developer mode (shop-wide): the address and how a plug reports are shown only then (review §1.3). */
+  get dev(): boolean { return this.devMode.on$.value; }
+  /** A paired plug's name for a person: its own, else the tool it is on, never its MAC (services/plug-name.ts). */
+  rowName(r: PlugRow): string { return plugName({ name: r.plugName }, r.forName); }
+  /** A found plug's name for a person, never its MAC or address. */
+  foundName(d: DiscoveredOutlet): string { return plugName(d); }
+  foundNameAt(ip: string): string { const d = this.outlets.find((o) => o.ip === ip); return d ? plugName(d) : 'this plug'; }
   how(r: PlugRow): string { return r.kind === 'tasmota' ? 'polled every half second' : 'pushes to this brain'; }
   pct(): number {
     const p = this.progress;
